@@ -1,11 +1,11 @@
-# Heimdall agent
+# Boxwarden agent
 
 Security checks for the Linux server you run yourself.
 One static binary: it finds what attackers actually use against small VPS setups,
 and notices when someone already got in.
 
 ```
-$ sudo heimdall scan
+$ sudo boxwarden scan
 [critical] Redis is exposed on port 6379 with no password
   Published by Docker on 0.0.0.0:6379, [::]:6379. Docker writes its own iptables rules, so ufw does NOT block this port.
   fix: In docker-compose.yml publish as "127.0.0.1:6379:6379" instead of "6379:6379", then: docker compose up -d
@@ -28,7 +28,7 @@ Supported: Debian and Ubuntu hosts; Debian, Ubuntu and Alpine containers.
 
 ## Install
 
-With a Heimdall account, the dashboard gives you a one-line install with a one-time token.
+With a Boxwarden account, the dashboard gives you a one-line install with a one-time token.
 [install.sh](install.sh) is short: read it first. It checks the binary's SHA-256, enrolls the server
 and adds systemd timers (ssh/ioc/exposed every 15 minutes, cve daily) that run with a read-only filesystem.
 
@@ -39,19 +39,19 @@ curl -fsSL <url>/install.sh | sudo sh -s ENROLL_TOKEN SERVER_URL
 Standalone, no account: build from source (Go 1.25+):
 
 ```sh
-GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o heimdall ./cmd/heimdall
-scp heimdall root@your-server:/usr/local/bin/
+GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o boxwarden ./cmd/boxwarden
+scp boxwarden root@your-server:/usr/local/bin/
 ```
 
 ## Use
 
 ```sh
-sudo heimdall baseline   # record what "normal" looks like
-sudo heimdall scan       # run all checks
-sudo heimdall scan --json
-sudo heimdall ports      # every listening port: owner, service, risk
-sudo heimdall scan --checks ssh,exposed   # a subset
-sudo heimdall scan --push  # send the report to Heimdall cloud (after `heimdall enroll`)
+sudo boxwarden baseline   # record what "normal" looks like
+sudo boxwarden scan       # run all checks
+sudo boxwarden scan --json
+sudo boxwarden ports      # every listening port: owner, service, risk
+sudo boxwarden scan --checks ssh,exposed   # a subset
+sudo boxwarden scan --push  # send the report to Boxwarden cloud (after `boxwarden enroll`)
 ```
 
 ```
@@ -67,7 +67,7 @@ makes one `GET /` to the port on localhost. It never sends anything that changes
 
 **Review the baseline output.** If the server is already compromised, the backdoor is now part of
 "normal". Any user, key, cron job, unit or port you don't recognize is a red flag.
-After you change the server on purpose, run `heimdall baseline` again.
+After you change the server on purpose, run `boxwarden baseline` again.
 
 Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 
@@ -78,7 +78,7 @@ Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 - **Keeps your secrets on the server.** The baseline stores names and hashes, not file contents.
 
 With `--push`, the report (findings and the port inventory: names, no file contents) goes to the
-Heimdall server you enrolled with. The agent never accepts commands back.
+Boxwarden server you enrolled with. The agent never accepts commands back.
 
 Apart from that, only the `cve` check talks to the outside: it sends installed OS package names and versions
 to [OSV.dev](https://osv.dev) and downloads the CISA KEV list. Nothing else leaves the machine.

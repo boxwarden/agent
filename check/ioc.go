@@ -14,14 +14,14 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 // Snapshot is what "normal" looks like on a host: category -> item -> fingerprint.
 // Names and hashes only, never file contents (ADR-0002).
 type Snapshot map[string]map[string]string
 
-const BaselinePath = "/var/lib/heimdall/baseline.json"
+const BaselinePath = "/var/lib/boxwarden/baseline.json"
 
 // Files attackers use for persistence and privilege. /etc/systemd/system is walked separately.
 var watchedGlobs = []string{
@@ -46,7 +46,7 @@ var iocMeta = map[string]struct {
 	"port":        {finding.Medium, "Listening port"},
 }
 
-const iocFix = "If you didn't make this change, assume compromise: isolate the server, rotate all keys and passwords, rebuild from a clean image. If you did: sudo heimdall baseline"
+const iocFix = "If you didn't make this change, assume compromise: isolate the server, rotate all keys and passwords, rebuild from a clean image. If you did: sudo boxwarden baseline"
 
 // IOC compares the host against the saved baseline and adds live indicators that need no baseline.
 func IOC() ([]finding.Finding, error) {
@@ -56,7 +56,7 @@ func IOC() ([]finding.Finding, error) {
 		return append(fs, finding.Finding{
 			ID: "ioc.no-baseline", Severity: finding.Medium,
 			Title: "No baseline yet: new users, keys, cron jobs and ports are not tracked",
-			Fix:   "sudo heimdall baseline   # then review its output",
+			Fix:   "sudo boxwarden baseline   # then review its output",
 		}), nil
 	}
 	if err != nil {

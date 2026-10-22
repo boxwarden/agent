@@ -9,7 +9,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 // Port is one listening TCP socket with everything we could learn about it.

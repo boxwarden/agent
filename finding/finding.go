@@ -1,4 +1,4 @@
-// Package finding is the wire format shared by the agent and the Heimdall cloud.
+// Package finding is the wire format shared by the agent and the Boxwarden cloud.
 // It carries results only — never file contents or secrets (see ADR-0002).
 package finding
 
@@ -31,7 +31,7 @@ func (f Finding) Fingerprint() string {
 	return f.ID + "|" + f.Title
 }
 
-// Report is what `heimdall scan --push` sends to POST /v1/report.
+// Report is what `boxwarden scan --push` sends to POST /v1/report.
 type Report struct {
 	AgentVersion string          `json:"agent_version"`
 	Hostname     string          `json:"hostname"`

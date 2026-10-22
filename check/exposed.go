@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 // probeRedis is swapped in tests so they don't depend on a local Redis.

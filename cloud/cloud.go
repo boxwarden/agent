@@ -1,4 +1,4 @@
-// Package cloud connects the agent to the Heimdall service. The agent only ever sends:
+// Package cloud connects the agent to the Boxwarden service. The agent only ever sends:
 // it never accepts commands back (ADR-0001).
 package cloud
 
@@ -14,10 +14,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
-var ConfigPath = "/etc/heimdall/agent.json"
+var ConfigPath = "/etc/boxwarden/agent.json"
 
 type Config struct {
 	Server string `json:"server"` // e.g. https://app.example.com
@@ -48,7 +48,7 @@ func Enroll(server, token, hostname string) error {
 func Push(r finding.Report) error {
 	b, err := os.ReadFile(ConfigPath)
 	if err != nil {
-		return fmt.Errorf("not enrolled (%w): run heimdall enroll first", err)
+		return fmt.Errorf("not enrolled (%w): run boxwarden enroll first", err)
 	}
 	var c Config
 	if err := json.Unmarshal(b, &c); err != nil {
@@ -72,7 +72,7 @@ func post(url, key string, body, out any) error {
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("User-Agent", "heimdall-agent")
+	req.Header.Set("User-Agent", "boxwarden-agent")
 	if key != "" {
 		req.Header.Set("Authorization", "Bearer "+key)
 	}

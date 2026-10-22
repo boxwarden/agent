@@ -1,9 +1,9 @@
-# Heimdall Contributor License Agreement
+# Boxwarden Contributor License Agreement
 
-Thank you for contributing to Heimdall. This agreement makes clear the terms under which
+Thank you for contributing to Boxwarden. This agreement makes clear the terms under which
 you contribute. You keep the copyright to your contribution; you grant us a license to use it.
 
-"We" or "Us" means the owner of the Heimdall project (github.com/d3f4u1t/heimdall-agent)
+"We" or "Us" means the owner of the Boxwarden project (github.com/boxwarden/agent)
 and its successors and assigns. "You" means the individual or legal entity submitting a
 Contribution. "Contribution" means any work you submit to the project, in any form,
 including code, documentation and issues with code attached.
@@ -14,7 +14,7 @@ You grant Us and recipients of software distributed by Us a perpetual, worldwide
 non-exclusive, no-charge, royalty-free, irrevocable license to reproduce, prepare
 derivative works of, publicly display, publicly perform, sublicense, and distribute your
 Contributions and such derivative works, **under any license terms, including proprietary
-ones**. This lets Us ship the agent under AGPL-3.0 and use it in Heimdall's commercial services.
+ones**. This lets Us ship the agent under AGPL-3.0 and use it in Boxwarden's commercial services.
 
 ## 2. Patent license
 

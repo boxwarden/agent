@@ -10,20 +10,20 @@ import (
 	"strings"
 	"text/tabwriter"
 
-	"github.com/d3f4u1t/heimdall-agent/check"
-	"github.com/d3f4u1t/heimdall-agent/cloud"
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/check"
+	"github.com/boxwarden/agent/cloud"
+	"github.com/boxwarden/agent/finding"
 )
 
 var version = "dev" // set by -ldflags "-X main.version=..."
 
 const usage = `usage:
-  heimdall scan [--json] [--checks ssh,ioc,exposed,cve] [--push]
-                           run checks; --push sends the report to Heimdall cloud
-  heimdall ports [--json]  list listening ports: who owns them, what they are, how risky
-  heimdall baseline        record current users, keys, cron, ports... as "normal"
-  heimdall enroll --server URL TOKEN
-                           connect this server to your Heimdall account`
+  boxwarden scan [--json] [--checks ssh,ioc,exposed,cve] [--push]
+                           run checks; --push sends the report to Boxwarden cloud
+  boxwarden ports [--json]  list listening ports: who owns them, what they are, how risky
+  boxwarden baseline        record current users, keys, cron, ports... as "normal"
+  boxwarden enroll [--server URL] TOKEN
+                           connect this server to your Boxwarden account`
 
 // Check names equal finding ID prefixes ("ssh.password-auth"), so the cloud knows which findings a report covers.
 var allChecks = []string{"ssh", "ioc", "exposed", "cve"}
@@ -52,10 +52,10 @@ func main() {
 
 func enroll(args []string) {
 	fl := flag.NewFlagSet("enroll", flag.ExitOnError)
-	server := fl.String("server", "", "Heimdall URL, e.g. https://app.example.com")
+	server := fl.String("server", "https://api.boxwarden.sh", "Boxwarden API URL")
 	fl.Parse(args)
-	if *server == "" || fl.NArg() != 1 {
-		fmt.Fprintln(os.Stderr, "usage: heimdall enroll --server URL TOKEN")
+	if fl.NArg() != 1 {
+		fmt.Fprintln(os.Stderr, "usage: boxwarden enroll [--server URL] TOKEN")
 		os.Exit(2)
 	}
 	host, _ := os.Hostname()
@@ -109,7 +109,7 @@ func scan(args []string) {
 	fl := flag.NewFlagSet("scan", flag.ExitOnError)
 	asJSON := fl.Bool("json", false, "print findings as JSON")
 	only := fl.String("checks", strings.Join(allChecks, ","), "comma-separated checks to run")
-	push := fl.Bool("push", false, "send the report to Heimdall cloud")
+	push := fl.Bool("push", false, "send the report to Boxwarden cloud")
 	fl.Parse(args)
 
 	selected := strings.Split(*only, ",")

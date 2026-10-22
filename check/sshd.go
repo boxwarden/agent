@@ -7,7 +7,7 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 // Drop-in, not sshd_config: Debian/Ubuntu include sshd_config.d first and the first value wins,

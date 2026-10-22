@@ -1,3 +1,3 @@
-module github.com/d3f4u1t/heimdall-agent
+module github.com/boxwarden/agent
 
 go 1.25

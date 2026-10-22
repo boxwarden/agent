@@ -15,7 +15,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 // OSV does version matching for Debian/Ubuntu/Alpine, so we never compare dpkg/apk versions ourselves.
@@ -285,7 +285,7 @@ func getJSON(url string, body, out any) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("User-Agent", "heimdall-agent")
+	req.Header.Set("User-Agent", "boxwarden-agent")
 	resp, err := httpc.Do(req)
 	if err != nil {
 		return err

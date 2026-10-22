@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/d3f4u1t/heimdall-agent/finding"
+	"github.com/boxwarden/agent/finding"
 )
 
 func TestCVEs(t *testing.T) {
