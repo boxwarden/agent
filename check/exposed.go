@@ -17,7 +17,12 @@ var probeRedis = redisNoAuth
 // Exposed reports risky services and admin panels listening on public addresses.
 // It can't see the firewall, so wording stays "reachable unless blocked"; the external scan confirms.
 func Exposed() ([]finding.Finding, error) {
-	return exposed(Inventory(true), ufwEnabled("/")), nil
+	return ExposedIn(Inventory(true)), nil
+}
+
+// ExposedIn is Exposed for an inventory the caller already has, so ports are probed once per scan.
+func ExposedIn(ports []Port) []finding.Finding {
+	return exposed(ports, ufwEnabled("/"))
 }
 
 func exposed(ports []Port, ufw bool) []finding.Finding {

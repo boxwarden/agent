@@ -189,6 +189,7 @@ func scanPackages(target, eco string, pkgs []pkg, kev map[string]bool) ([]findin
 			Title:  fmt.Sprintf("%s: %d packages have security fixes available (%d vulnerabilities)", target, len(fixable), total),
 			Detail: "Most affected: " + strings.Join(top, ", "),
 			Fix:    upgradeFix(eco, container, nil),
+			Key:    "cve.outdated|" + target, // counts in the title change with every apt run
 		})
 	}
 	return fs, nil

@@ -19,7 +19,7 @@ $ sudo heimdall scan
 
 | Check | Finds |
 |---|---|
-| `sshd` | Password and keyboard-interactive login, root login with a password, empty passwords |
+| `ssh` | Password and keyboard-interactive login, root login with a password, empty passwords |
 | `exposed` | Redis, Postgres, MySQL, MongoDB, Elasticsearch, Docker API, etcd, Kafka, Swarm manager and others on public interfaces, also on non-default ports; admin panels (Portainer, phpMyAdmin, Grafana, Kafka UI...); ports published by Docker or Swarm that ufw does not block; Redis answering without a password |
 | `cve` | OS packages on the host and in running containers with published security fixes; anything in [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (exploited in the wild) is critical |
 | `ioc` | Signs of compromise: new users, SSH keys, sudo/docker group members, cron jobs, systemd units, SUID binaries and listening ports since your baseline; non-empty `/etc/ld.so.preload`; processes running from `/tmp`, `/dev/shm` or a deleted binary |
@@ -28,7 +28,15 @@ Supported: Debian and Ubuntu hosts; Debian, Ubuntu and Alpine containers.
 
 ## Install
 
-No releases yet. Build from source (Go 1.25+):
+With a Heimdall account, the dashboard gives you a one-line install with a one-time token.
+[install.sh](install.sh) is short: read it first. It checks the binary's SHA-256, enrolls the server
+and adds systemd timers (ssh/ioc/exposed every 15 minutes, cve daily) that run with a read-only filesystem.
+
+```sh
+curl -fsSL <url>/install.sh | sudo sh -s ENROLL_TOKEN SERVER_URL
+```
+
+Standalone, no account: build from source (Go 1.25+):
 
 ```sh
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o heimdall ./cmd/heimdall
@@ -42,6 +50,8 @@ sudo heimdall baseline   # record what "normal" looks like
 sudo heimdall scan       # run all checks
 sudo heimdall scan --json
 sudo heimdall ports      # every listening port: owner, service, risk
+sudo heimdall scan --checks ssh,exposed   # a subset
+sudo heimdall scan --push  # send the report to Heimdall cloud (after `heimdall enroll`)
 ```
 
 ```
@@ -67,7 +77,10 @@ Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 - **Opens no ports, accepts no commands.**
 - **Keeps your secrets on the server.** The baseline stores names and hashes, not file contents.
 
-Only the `cve` check talks to the outside: it sends installed OS package names and versions
+With `--push`, the report (findings and the port inventory: names, no file contents) goes to the
+Heimdall server you enrolled with. The agent never accepts commands back.
+
+Apart from that, only the `cve` check talks to the outside: it sends installed OS package names and versions
 to [OSV.dev](https://osv.dev) and downloads the CISA KEV list. Nothing else leaves the machine.
 Port identification connects only to the server's own ports on localhost.
 
