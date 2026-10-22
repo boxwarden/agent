@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -47,6 +48,11 @@ type osvVuln struct {
 		Ranges []struct {
 			Events []map[string]string `json:"events"`
 		} `json:"ranges"`
+		EcosystemSpecific struct {
+			Binaries []struct {
+				Name string `json:"binary_name"`
+			} `json:"binaries"`
+		} `json:"ecosystem_specific"`
 	} `json:"affected"`
 }
 
@@ -151,7 +157,7 @@ func scanPackages(target, eco string, pkgs []pkg, kev map[string]bool) ([]findin
 				continue // no fix published yet: nothing the user can do
 			}
 			n++
-			if cve := cveRe.FindString(id + " " + strings.Join(v.Aliases, " ")); kev[cve] {
+			if cve := cveRe.FindString(id + " " + strings.Join(v.Aliases, " ")); kev[cve] && affectsInstalled(v, eco, p) {
 				exploited = append(exploited, cve)
 				fixedIn = fixed // ponytail: with several KEVs in one package this is the last one's fix; fine, upgrading to latest covers all
 			}
@@ -166,7 +172,7 @@ func scanPackages(target, eco string, pkgs []pkg, kev map[string]bool) ([]findin
 			fs = append(fs, finding.Finding{
 				ID: "cve.kev", Severity: finding.Critical,
 				Title:  target + ": " + p.src + " " + p.ver + " has actively exploited " + strings.Join(exploited, ", "),
-				Detail: "Listed in CISA Known Exploited Vulnerabilities: attackers use this in the wild. Fixed in " + fixedIn + ".",
+				Detail: "Listed in CISA Known Exploited Vulnerabilities: attackers use this in the wild. Fixed in " + fixedIn + ". Installed from this source: " + strings.Join(p.bins, ", ") + ".",
 				Fix:    upgradeFix(eco, container, p.bins),
 			})
 		}
@@ -203,6 +209,23 @@ func fixedVersion(v osvVuln, eco, src string) string {
 		}
 	}
 	return ""
+}
+
+// affectsInstalled is false only when OSV names the vulnerable binaries (Ubuntu does) and none is installed,
+// e.g. a telnetd bug when only the telnet client is present. Debian records don't list binaries: assume affected.
+func affectsInstalled(v osvVuln, eco string, p pkg) bool {
+	for _, a := range v.Affected {
+		if a.Package.Ecosystem != eco || a.Package.Name != p.src || len(a.EcosystemSpecific.Binaries) == 0 {
+			continue
+		}
+		for _, b := range a.EcosystemSpecific.Binaries {
+			if slices.Contains(p.bins, b.Name) {
+				return true
+			}
+		}
+		return false
+	}
+	return true
 }
 
 func upgradeFix(eco string, container bool, bins []string) string {

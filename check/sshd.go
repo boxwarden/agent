@@ -10,7 +10,14 @@ import (
 	"github.com/d3f4u1t/heimdall-agent/finding"
 )
 
-const sshdFix = "sudo sshd -t && sudo systemctl reload ssh"
+// Drop-in, not sshd_config: Debian/Ubuntu include sshd_config.d first and the first value wins,
+// so edits to sshd_config lose to e.g. 50-cloud-init.conf. "00-" sorts before everything.
+const sshdDropIn = "/etc/ssh/sshd_config.d/00-hardening.conf"
+
+const sshdApply = "sudo sshd -t && sudo systemctl reload ssh"
+
+// Disabling passwords on a server without a working key locks you out.
+const keysFirst = "FIRST add your key and check it works in a new session, keeping this one open: ssh-copy-id root@your-server. THEN "
 
 // SSHD reads the effective config via `sshd -T` (resolves Include and defaults; needs root).
 func SSHD() ([]finding.Finding, error) {
@@ -21,39 +28,56 @@ func SSHD() ([]finding.Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sshd -T: %w (run as root)", err)
 	}
-	return sshdFindings(string(out)), nil
+	return sshdFindings(string(out), rootHasKeys("/")), nil
 }
 
-func sshdFindings(effective string) []finding.Finding {
+func rootHasKeys(root string) bool {
+	for line := range strings.SplitSeq(readFile(root, "root/.ssh/authorized_keys"), "\n") {
+		if keyFingerprint(line) != "" {
+			return true
+		}
+	}
+	return false
+}
+
+func sshdFindings(effective string, rootKeys bool) []finding.Finding {
 	cfg := map[string]string{}
 	sc := bufio.NewScanner(strings.NewReader(effective))
 	for sc.Scan() {
 		k, v, _ := strings.Cut(strings.TrimSpace(sc.Text()), " ")
 		cfg[strings.ToLower(k)] = strings.ToLower(v)
 	}
+	passwords := cfg["passwordauthentication"] == "yes" || cfg["kbdinteractiveauthentication"] == "yes"
+	disablePasswords := "add `PasswordAuthentication no` and `KbdInteractiveAuthentication no` to " + sshdDropIn + ", then: " + sshdApply
 
 	var fs []finding.Finding
-	if cfg["permitemptypasswords"] == "yes" {
+	if passwords && cfg["permitemptypasswords"] == "yes" {
 		fs = append(fs, finding.Finding{
 			ID: "ssh.empty-passwords", Severity: finding.Critical,
 			Title: "SSH allows login with empty passwords",
-			Fix:   "Set `PermitEmptyPasswords no` in /etc/ssh/sshd_config, then: " + sshdFix,
+			Fix:   "Add `PermitEmptyPasswords no` to " + sshdDropIn + ", then: " + sshdApply,
 		})
 	}
-	if cfg["passwordauthentication"] == "yes" || cfg["kbdinteractiveauthentication"] == "yes" {
-		fs = append(fs, finding.Finding{
+	if passwords && cfg["permitrootlogin"] == "yes" {
+		f := finding.Finding{
+			ID: "ssh.root-password-login", Severity: finding.Critical,
+			Title:  "Root can log in over SSH with a password",
+			Detail: "Bots try root passwords on every public SSH server around the clock; one weak or leaked password is full control.",
+			Fix:    keysFirst + "add `PermitRootLogin prohibit-password` and `PasswordAuthentication no` to " + sshdDropIn + ", then: " + sshdApply + "; and change the root password: passwd",
+		}
+		if !rootKeys {
+			f.Detail += " root has no SSH keys, so every login uses this password."
+		}
+		fs = append(fs, f)
+	}
+	if passwords {
+		f := finding.Finding{
 			ID: "ssh.password-auth", Severity: finding.High,
 			Title:  "SSH accepts passwords",
 			Detail: "Password logins are brute-forced around the clock. Use keys only.",
-			Fix:    "Set `PasswordAuthentication no` and `KbdInteractiveAuthentication no` in /etc/ssh/sshd_config, then: " + sshdFix,
-		})
-	}
-	if cfg["permitrootlogin"] == "yes" {
-		fs = append(fs, finding.Finding{
-			ID: "ssh.root-password-login", Severity: finding.High,
-			Title: "SSH allows root login with a password",
-			Fix:   "Set `PermitRootLogin prohibit-password` (or `no`) in /etc/ssh/sshd_config, then: " + sshdFix,
-		})
+			Fix:    keysFirst + disablePasswords,
+		}
+		fs = append(fs, f)
 	}
 	return fs
 }

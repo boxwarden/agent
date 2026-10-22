@@ -166,16 +166,18 @@ func Collect(root string) Snapshot {
 		return nil
 	})
 
-	for _, addr := range listening(root) {
-		s["port"]["tcp "+addr] = ""
+	for _, sock := range listening(root) {
+		s["port"]["tcp "+sock.addr] = ""
 	}
 	return s
 }
 
-// listening returns "ip:port" of TCP sockets in LISTEN state.
-// ponytail: TCP only, no owning process; add inode->pid mapping and UDP when alerts need them.
-func listening(root string) []string {
-	var addrs []string
+type socket struct{ addr, inode string }
+
+// listening returns TCP sockets in LISTEN state. The inode links a socket to its process (see ports.go).
+// ponytail: TCP only; add UDP when a check needs it.
+func listening(root string) []socket {
+	var socks []socket
 	for _, proto := range []string{"tcp", "tcp6"} {
 		b, _ := os.ReadFile(filepath.Join(root, "proc/net", proto))
 		for line := range strings.SplitSeq(string(b), "\n") {
@@ -183,12 +185,16 @@ func listening(root string) []string {
 			if len(f) < 4 || f[3] != "0A" {
 				continue
 			}
-			if addr := procAddr(f[1]); addr != "" {
-				addrs = append(addrs, addr)
+			s := socket{addr: procAddr(f[1])}
+			if len(f) > 9 {
+				s.inode = f[9]
+			}
+			if s.addr != "" {
+				socks = append(socks, s)
 			}
 		}
 	}
-	return addrs
+	return socks
 }
 
 // Live finds indicators that are suspicious on their own, without a baseline.

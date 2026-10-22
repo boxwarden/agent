@@ -150,3 +150,20 @@ func TestContainerLabel(t *testing.T) {
 		t.Errorf("label: %q", got)
 	}
 }
+
+func TestAffectsInstalled(t *testing.T) {
+	var v osvVuln
+	json.Unmarshal([]byte(`{"affected":[{"package":{"name":"inetutils","ecosystem":"Ubuntu:24.04:LTS"},
+		"ecosystem_specific":{"binaries":[{"binary_name":"inetutils-telnetd"}]}}]}`), &v)
+	client := pkg{src: "inetutils", bins: []string{"inetutils-telnet"}}
+	server := pkg{src: "inetutils", bins: []string{"inetutils-telnet", "inetutils-telnetd"}}
+	if affectsInstalled(v, "Ubuntu:24.04:LTS", client) {
+		t.Error("telnetd bug must not be critical when only the telnet client is installed")
+	}
+	if !affectsInstalled(v, "Ubuntu:24.04:LTS", server) {
+		t.Error("telnetd installed: affected")
+	}
+	if !affectsInstalled(osvVuln{}, "Debian:12", client) {
+		t.Error("no binary data (Debian): assume affected")
+	}
+}

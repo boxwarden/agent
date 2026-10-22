@@ -5,6 +5,7 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"text/tabwriter"
 
 	"github.com/d3f4u1t/heimdall-agent/check"
 	"github.com/d3f4u1t/heimdall-agent/finding"
@@ -12,6 +13,7 @@ import (
 
 const usage = `usage:
   heimdall scan [--json]   run all checks
+  heimdall ports [--json]  list listening ports: who owns them, what they are, how risky
   heimdall baseline        record current users, keys, cron, ports... as "normal"`
 
 var checks = map[string]func() ([]finding.Finding, error){
@@ -29,12 +31,36 @@ func main() {
 	switch os.Args[1] {
 	case "scan":
 		scan(os.Args[2:])
+	case "ports":
+		ports(os.Args[2:])
 	case "baseline":
 		baseline()
 	default:
 		fmt.Fprintln(os.Stderr, usage)
 		os.Exit(2)
 	}
+}
+
+func ports(args []string) {
+	fl := flag.NewFlagSet("ports", flag.ExitOnError)
+	asJSON := fl.Bool("json", false, "print ports as JSON")
+	fl.Parse(args)
+
+	ps := check.Inventory(true)
+	if *asJSON {
+		json.NewEncoder(os.Stdout).Encode(ps)
+		return
+	}
+	w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
+	fmt.Fprintln(w, "ADDRESS\tOWNER\tSERVICE\tRISK")
+	for _, p := range ps {
+		svc := p.Service
+		if !p.Public {
+			svc = "(local only)"
+		}
+		fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", p.Addr, p.Owner(), svc, p.Risk())
+	}
+	w.Flush()
 }
 
 func baseline() {

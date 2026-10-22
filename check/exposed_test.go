@@ -10,33 +10,38 @@ import (
 )
 
 func TestExposed(t *testing.T) {
-	root := t.TempDir()
-	// 0.0.0.0:6379 redis, [::]:6379 same redis, 0.0.0.0:55432 postgres published by Docker (custom proxy name) to container 5432,
-	// 127.0.0.1:3306 mysql (fine), 0.0.0.0:443 https (not risky).
-	write(t, root, "proc/net/tcp", tcpHeader+
-		"0: 00000000:18EB 00000000:0000 0A\n"+
-		"1: 00000000:D888 00000000:0000 0A\n"+
-		"2: 0100007F:0CEA 00000000:0000 0A\n"+
-		"3: 00000000:01BB 00000000:0000 0A\n")
-	write(t, root, "proc/net/tcp6", tcpHeader+"0: 00000000000000000000000000000000:18EB 00000000000000000000000000000000:0000 0A\n")
-	write(t, root, "proc/77/cmdline", strings.Join([]string{"/opt/orbstack-guest/pstub", "-proto", "tcp", "-host-ip", "0.0.0.0", "-host-port", "55432", "-container-ip", "172.17.0.2", "-container-port", "5432"}, "\x00")+"\x00")
-	write(t, root, "etc/ufw/ufw.conf", "# comment\nENABLED=yes\n")
-
+	ports := []Port{
+		{Addr: "0.0.0.0:6379", Port: 6379, Public: true, ServicePort: 6379, Process: "redis-server", Unit: "redis-server.service"},
+		{Addr: "[::]:6379", Port: 6379, Public: true, ServicePort: 6379},
+		{Addr: "0.0.0.0:55432", Port: 55432, Public: true, ServicePort: 5432, Published: "docker", Container: "app-db-1", Image: "postgres:16"},
+		{Addr: "[::]:9443", Port: 9443, Public: true, ServicePort: 9443, Published: "swarm", Container: "portainer_portainer", Service: `https 200 "Portainer"`},
+		{Addr: "127.0.0.1:3306", Port: 3306, Public: false, ServicePort: 3306},                                          // local only
+		{Addr: "0.0.0.0:443", Port: 443, Public: true, ServicePort: 443, Image: "traefik:v3", Service: "https 404"},     // proxy, not a panel
+		{Addr: "0.0.0.0:2377", Port: 2377, Public: true, ServicePort: 2377, Process: "dockerd", Unit: "docker.service"}, // swarm manager
+	}
 	probeRedis = func(addr string) bool { return addr == "127.0.0.1:6379" }
 	defer func() { probeRedis = redisNoAuth }()
 
 	got := map[string]finding.Finding{}
-	for _, f := range exposed(root) {
+	for _, f := range exposed(ports, true) {
 		got[f.ID] = f
 	}
-	if len(got) != 2 {
-		t.Fatalf("want redis and postgres only, got %v", got)
+	if len(got) != 4 {
+		t.Fatalf("want redis, postgres, portainer, swarm manager; got %v", got)
 	}
-	if r := got["exposed.redis"]; r.Severity != finding.Critical || !strings.Contains(r.Detail, "0.0.0.0:6379, [::]:6379") {
+	if r := got["exposed.redis"]; r.Severity != finding.Critical || !strings.Contains(r.Detail, "0.0.0.0:6379, [::]:6379 (redis-server (redis-server.service))") {
 		t.Errorf("redis: %+v", r)
 	}
-	if p := got["exposed.postgres"]; p.Severity != finding.High || !strings.Contains(p.Detail, "ufw does NOT block") || !strings.Contains(p.Detail, "ufw is enabled") || !strings.Contains(p.Fix, `"127.0.0.1:55432:5432"`) || p.Title != "PostgreSQL is exposed on port 55432" {
+	if p := got["exposed.postgres"]; p.Title != "PostgreSQL is exposed on port 55432" || !strings.Contains(p.Detail, "ufw does NOT block") ||
+		!strings.Contains(p.Detail, "ufw is enabled") || !strings.Contains(p.Fix, `"127.0.0.1:55432:5432"`) {
 		t.Errorf("postgres: %+v", p)
+	}
+	if a := got["exposed.admin-panel"]; a.Title != "Portainer admin panel is exposed on port 9443" || a.Severity != finding.High ||
+		!strings.Contains(a.Detail, "Swarm service portainer_portainer") || !strings.Contains(a.Fix, "Remove `ports:`") {
+		t.Errorf("portainer: %+v", a)
+	}
+	if s := got["exposed.swarm-manager"]; s.Severity != finding.Medium {
+		t.Errorf("swarm manager: %+v", s)
 	}
 }
 
@@ -62,5 +67,21 @@ func TestRedisNoAuth(t *testing.T) {
 	}
 	if redisNoAuth("127.0.0.1:1") {
 		t.Error("closed port must not count as open redis")
+	}
+}
+
+func TestClassifyByImage(t *testing.T) {
+	for image, want := range map[string]string{
+		"confluentinc/cp-kafka:latest":                             "high: Kafka",
+		"provectuslabs/kafka-ui:latest":                            "high: Kafka UI admin panel",
+		"docker.io/library/redis:7-alpine@sha256:abc":              "high: Redis",
+		"prometheuscommunity/postgres-exporter:v0.15":              "",
+		"traefik:v3.6.7":                                           "",
+		"10e07c83.registry.twcstorage.ru/backend:v2.0.0@sha256:9d": "",
+	} {
+		p := Port{Public: true, ServicePort: 29092, Image: image}
+		if got := p.Risk(); got != want {
+			t.Errorf("%s: got %q, want %q", image, got, want)
+		}
 	}
 }

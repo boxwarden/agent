@@ -1,3 +1,5 @@
 /heimdall
 /dist/
 .DS_Store
+scan-*.txt
+baseline-*.json
