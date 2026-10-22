@@ -58,6 +58,10 @@ Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 Network calls are made only by the `cve` check: it sends installed OS package names and versions
 to [OSV.dev](https://osv.dev) and downloads the CISA KEV list. Nothing else leaves the machine.
 
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md). Contributions require signing the [CLA](CLA.md).
+
 ## License
 
 [AGPL-3.0](LICENSE)
