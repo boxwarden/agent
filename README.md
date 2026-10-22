@@ -33,10 +33,18 @@ With a Boxwarden account, the dashboard gives you a one-line install with a one-
 and adds systemd timers (ssh/ioc/exposed every 15 minutes, cve daily) that run with a read-only filesystem.
 
 ```sh
-curl -fsSL <url>/install.sh | sudo sh -s ENROLL_TOKEN SERVER_URL
+curl -fsSL https://github.com/boxwarden/agent/releases/latest/download/install.sh | sudo sh -s ENROLL_TOKEN https://api.boxwarden.sh
 ```
 
-Standalone, no account: build from source (Go 1.25+):
+Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tag, with no build cache,
+and carry signed build provenance. To check that a binary came from this repo's workflow:
+
+```sh
+gh attestation verify boxwarden-linux-amd64 --repo boxwarden/agent
+```
+
+Standalone, no account: download `boxwarden-linux-amd64` from [Releases](https://github.com/boxwarden/agent/releases)
+or build from source (Go 1.25+):
 
 ```sh
 GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o boxwarden ./cmd/boxwarden

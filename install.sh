@@ -1,7 +1,7 @@
 #!/bin/sh
 # Boxwarden agent installer. It is short on purpose: read it before piping it to sh.
 #
-#   curl -fsSL <url>/install.sh | sudo sh -s ENROLL_TOKEN SERVER_URL
+#   curl -fsSL https://github.com/boxwarden/agent/releases/latest/download/install.sh | sudo sh -s ENROLL_TOKEN SERVER_URL
 #
 # What it does:
 #   1. downloads the agent for this CPU and checks its SHA-256 against the release checksums
@@ -15,7 +15,7 @@ set -eu
 
 TOKEN="${1:?usage: install.sh ENROLL_TOKEN SERVER_URL}"
 SERVER="${2:?usage: install.sh ENROLL_TOKEN SERVER_URL}"
-REPO="${BOXWARDEN_REPO:-}"        # GitHub owner/repo with releases
+REPO="${BOXWARDEN_REPO:-boxwarden/agent}"  # GitHub owner/repo with releases
 VERSION="${BOXWARDEN_VERSION:-latest}"
 
 [ "$(id -u)" = 0 ] || { echo "boxwarden: run as root (sudo)" >&2; exit 1; }
@@ -26,7 +26,6 @@ trap 'rm -rf "$tmp"' EXIT
 if [ -n "${BOXWARDEN_BINARY:-}" ]; then
 	cp "$BOXWARDEN_BINARY" "$tmp/boxwarden"
 else
-	[ -n "$REPO" ] || { echo "boxwarden: set BOXWARDEN_REPO=owner/repo or BOXWARDEN_BINARY=/path" >&2; exit 1; }
 	case "$(uname -m)" in
 		x86_64) arch=amd64 ;;
 		aarch64 | arm64) arch=arm64 ;;
