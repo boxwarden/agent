@@ -75,20 +75,21 @@ func (f Finding) Cleaned() Finding {
 // Metrics is what `boxwarden metrics --push` sends to POST /v1/metrics every minute. Counters are
 // cumulative since boot: the cloud turns two samples into rates, so the agent keeps no state.
 type Metrics struct {
-	AgentVersion string     `json:"agent_version"`
-	BootTime     int64      `json:"boot_time"` // unix seconds; counters restart when it changes
-	NumCPU       int        `json:"num_cpu"`
-	CPU          CPUTimes   `json:"cpu"`
-	Load         [3]float64 `json:"load"`
-	MemTotal     uint64     `json:"mem_total"` // bytes
-	MemAvailable uint64     `json:"mem_available"`
-	SwapTotal    uint64     `json:"swap_total"`
-	SwapFree     uint64     `json:"swap_free"`
-	Disks        []Disk     `json:"disks"`
-	NetRx        uint64     `json:"net_rx"` // bytes since boot on physical interfaces
-	NetTx        uint64     `json:"net_tx"`
-	OOMKills     uint64     `json:"oom_kills"` // since boot
-	Top          []Proc     `json:"top"`       // busiest processes during a one-second sample
+	AgentVersion string      `json:"agent_version"`
+	BootTime     int64       `json:"boot_time"` // unix seconds; counters restart when it changes
+	NumCPU       int         `json:"num_cpu"`
+	CPU          CPUTimes    `json:"cpu"`
+	Load         [3]float64  `json:"load"`
+	MemTotal     uint64      `json:"mem_total"` // bytes
+	MemAvailable uint64      `json:"mem_available"`
+	SwapTotal    uint64      `json:"swap_total"`
+	SwapFree     uint64      `json:"swap_free"`
+	Disks        []Disk      `json:"disks"`
+	NetRx        uint64      `json:"net_rx"` // bytes since boot on physical interfaces
+	NetTx        uint64      `json:"net_tx"`
+	OOMKills     uint64      `json:"oom_kills"`             // since boot
+	OOMVictims   []OOMVictim `json:"oom_victims,omitempty"` // the newest kills still in the kernel log
+	Top          []Proc      `json:"top"`                   // busiest processes during a one-second sample
 }
 
 // CPUTimes are /proc/stat jiffies summed over all CPUs.
@@ -106,6 +107,14 @@ type Disk struct {
 	Avail      uint64 `json:"avail"` // free for non-root users, what `df` shows
 	Inodes     uint64 `json:"inodes"`
 	InodesFree uint64 `json:"inodes_free"`
+}
+
+// OOMVictim is a process the kernel's OOM killer stopped, from a "Killed process" line in /dev/kmsg.
+type OOMVictim struct {
+	At   int64  `json:"at"` // unix seconds
+	PID  int    `json:"pid"`
+	Name string `json:"name"`
+	RSS  uint64 `json:"rss"` // bytes, anon-rss when it was killed
 }
 
 type Proc struct {
