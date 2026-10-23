@@ -14,7 +14,7 @@ import (
 // so edits to sshd_config lose to e.g. 50-cloud-init.conf. "00-" sorts before everything.
 const sshdDropIn = "/etc/ssh/sshd_config.d/00-hardening.conf"
 
-const sshdApply = "sudo sshd -t && sudo systemctl reload ssh"
+const sshdApply = "sudo sshd -t && (sudo systemctl reload ssh || sudo systemctl reload sshd)" // "sshd" on RHEL
 
 // Disabling passwords on a server without a working key locks you out.
 const keysFirst = "FIRST add your key and check it works in a new session, keeping this one open: ssh-copy-id root@your-server. THEN "
@@ -28,7 +28,7 @@ func SSHD() ([]finding.Finding, error) {
 	if err != nil {
 		return nil, fmt.Errorf("sshd -T: %w (run as root)", err)
 	}
-	return sshdFindings(string(out), rootHasKeys("/")), nil
+	return sshdFindings(string(out), rootHasKeys("/"), rootLocked("/")), nil
 }
 
 func rootHasKeys(root string) bool {
@@ -40,7 +40,17 @@ func rootHasKeys(root string) bool {
 	return false
 }
 
-func sshdFindings(effective string, rootKeys bool) []finding.Finding {
+// rootLocked is true when root has no usable password, so password logins as root can't succeed.
+func rootLocked(root string) bool {
+	for _, a := range accounts(root) {
+		if a.name == "root" {
+			return a.locked()
+		}
+	}
+	return false
+}
+
+func sshdFindings(effective string, rootKeys, rootLocked bool) []finding.Finding {
 	cfg := map[string]string{}
 	sc := bufio.NewScanner(strings.NewReader(effective))
 	for sc.Scan() {
@@ -58,7 +68,7 @@ func sshdFindings(effective string, rootKeys bool) []finding.Finding {
 			Fix:   "Add `PermitEmptyPasswords no` to " + sshdDropIn + ", then: " + sshdApply,
 		})
 	}
-	if passwords && cfg["permitrootlogin"] == "yes" {
+	if passwords && cfg["permitrootlogin"] == "yes" && !rootLocked {
 		f := finding.Finding{
 			ID: "ssh.root-password-login", Severity: finding.Critical,
 			Title:  "Root can log in over SSH with a password",

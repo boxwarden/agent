@@ -9,8 +9,10 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -24,12 +26,16 @@ type Config struct {
 	Key    string `json:"key"`    // server key, the only credential the agent holds
 }
 
-var httpc = &http.Client{Timeout: 30 * time.Second}
+var httpc = &http.Client{
+	Timeout: 30 * time.Second,
+	// A redirect could replay the key to another host or over plain http.
+	CheckRedirect: func(*http.Request, []*http.Request) error { return errors.New("redirects are not followed") },
+}
 
 // Enroll trades a one-time token for a permanent server key and saves it (0600).
 func Enroll(server, token, hostname string) error {
 	server = strings.TrimRight(server, "/")
-	if !strings.HasPrefix(server, "https://") && !strings.HasPrefix(server, "http://localhost") && !strings.HasPrefix(server, "http://127.0.0.1") {
+	if u, err := url.Parse(server); err != nil || u.Scheme != "https" && !(u.Scheme == "http" && slices.Contains([]string{"localhost", "127.0.0.1", "::1"}, u.Hostname())) {
 		return errors.New("server must be https:// (plain http only for localhost)")
 	}
 	var resp struct {
@@ -45,7 +51,12 @@ func Enroll(server, token, hostname string) error {
 }
 
 // Push sends one report.
-func Push(r finding.Report) error {
+func Push(r finding.Report) error { return send("/v1/report", r) }
+
+// PushMetrics sends one resource sample.
+func PushMetrics(m finding.Metrics) error { return send("/v1/metrics", m) }
+
+func send(path string, body any) error {
 	b, err := os.ReadFile(ConfigPath)
 	if err != nil {
 		return fmt.Errorf("not enrolled (%w): run boxwarden enroll first", err)
@@ -54,7 +65,7 @@ func Push(r finding.Report) error {
 	if err := json.Unmarshal(b, &c); err != nil {
 		return fmt.Errorf("%s: %w", ConfigPath, err)
 	}
-	return post(c.Server+"/v1/report", c.Key, r, nil)
+	return post(c.Server+path, c.Key, body, nil)
 }
 
 func save(c Config) error {

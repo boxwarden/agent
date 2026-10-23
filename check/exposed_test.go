@@ -2,6 +2,7 @@ package check
 
 import (
 	"bufio"
+	"maps"
 	"net"
 	"strings"
 	"testing"
@@ -19,8 +20,12 @@ func TestExposed(t *testing.T) {
 		{Addr: "0.0.0.0:443", Port: 443, Public: true, ServicePort: 443, Image: "traefik:v3", Service: "https 404"},     // proxy, not a panel
 		{Addr: "0.0.0.0:2377", Port: 2377, Public: true, ServicePort: 2377, Process: "dockerd", Unit: "docker.service"}, // swarm manager
 	}
-	probeRedis = func(addr string) bool { return addr == "127.0.0.1:6379" }
-	defer func() { probeRedis = redisNoAuth }()
+	saved := maps.Clone(noAuth)
+	defer func() { noAuth = saved }()
+	for id := range noAuth {
+		noAuth[id] = func(string) bool { return false } // no dependence on databases on this machine
+	}
+	noAuth["redis"] = func(addr string) bool { return addr == "127.0.0.1:6379" }
 
 	got := map[string]finding.Finding{}
 	for _, f := range exposed(ports, true) {
@@ -83,5 +88,40 @@ func TestClassifyByImage(t *testing.T) {
 		if got := p.Risk(); got != want {
 			t.Errorf("%s: got %q, want %q", image, got, want)
 		}
+	}
+}
+
+// fakeServer answers every connection with reply after reading the client's first bytes.
+func fakeServer(t *testing.T, reply []byte) string {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { ln.Close() })
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			c.Read(make([]byte, 512))
+			c.Write(reply)
+			c.Close()
+		}
+	}()
+	return ln.Addr().String()
+}
+
+func TestNoAuthProbes(t *testing.T) {
+	authOK := []byte{'R', 0, 0, 0, 8, 0, 0, 0, 0}
+	scram := []byte{'R', 0, 0, 0, 23, 0, 0, 0, 10, 'S', 'C', 'R', 'A', 'M'}
+	if !postgresTrust(fakeServer(t, authOK)) || postgresTrust(fakeServer(t, scram)) {
+		t.Error("postgres: trust must be detected, SCRAM must not")
+	}
+	if !memcachedOpen(fakeServer(t, []byte("VERSION 1.6.21\r\n"))) || memcachedOpen(fakeServer(t, []byte("ERROR\r\n"))) {
+		t.Error("memcached")
+	}
+	if redisNoAuth(fakeServer(t, []byte("-NOAUTH Authentication required.\r\n"))) || !redisNoAuth(fakeServer(t, []byte("+PONG\r\n"))) {
+		t.Error("redis")
 	}
 }

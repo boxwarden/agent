@@ -16,7 +16,7 @@ import (
 type Port struct {
 	Addr   string `json:"addr"`
 	Port   int    `json:"port"`
-	Public bool   `json:"public"` // bound to a non-loopback address
+	Public bool   `json:"public"` // bound to all interfaces or a global address
 
 	PID     string `json:"pid,omitempty"`
 	Process string `json:"process,omitempty"`
@@ -28,6 +28,14 @@ type Port struct {
 	ServicePort int    `json:"service_port"`        // port inside the container, identifies the service
 
 	Service string `json:"service,omitempty"` // fingerprint, public ports only
+}
+
+var cgnat = &net.IPNet{IP: net.IP{100, 64, 0, 0}, Mask: net.CIDRMask(10, 32)}
+
+// publicIP: could the internet reach this listen address? 0.0.0.0 and :: listen on every interface.
+// Private, Tailscale (100.64/10), docker0 and link-local binds are reachable only from inside.
+func publicIP(ip net.IP) bool {
+	return ip != nil && !ip.IsLoopback() && !ip.IsPrivate() && !ip.IsLinkLocalUnicast() && !cgnat.Contains(ip)
 }
 
 var unitRe = regexp.MustCompile(`/([^/]+\.service)`)
@@ -70,10 +78,10 @@ func inventory(root string, probe bool) []Port {
 	for _, sock := range listening(root) {
 		host, ps, _ := net.SplitHostPort(sock.addr)
 		n, _ := strconv.Atoi(ps)
-		p := Port{Addr: sock.addr, Port: n, Public: !net.ParseIP(host).IsLoopback(), ServicePort: n}
+		p := Port{Addr: sock.addr, Port: n, Public: publicIP(net.ParseIP(host)), ServicePort: n}
 		if pid := owners[sock.inode]; pid != "" {
 			p.PID = pid
-			p.Process = strings.TrimSpace(readFile(root, "proc/"+pid+"/comm"))
+			p.Process = finding.Clean(strings.TrimSpace(readFile(root, "proc/"+pid+"/comm")), 64) // set by the process itself
 			cg := readFile(root, "proc/"+pid+"/cgroup")
 			if id := containerRe.FindString(cg); id != "" {
 				if c, ok := byID[id]; ok {
@@ -93,9 +101,15 @@ func inventory(root string, probe bool) []Port {
 
 	if probe {
 		var wg sync.WaitGroup
+		sem := make(chan struct{}, 16) // a user can open thousands of listeners
 		for i := range ports {
 			if ports[i].Public {
-				wg.Go(func() { ports[i].Service = fingerprint(dialAddr(ports[i].Addr)) })
+				wg.Go(func() {
+					sem <- struct{}{}
+					defer func() { <-sem }()
+					// Whoever listens on the port writes this text: never trust it.
+					ports[i].Service = finding.Clean(fingerprint(dialAddr(ports[i].Addr)), 200)
+				})
 			}
 		}
 		wg.Wait()
@@ -180,6 +194,14 @@ var riskyPorts = map[int]struct {
 	2181:  {"zookeeper", "ZooKeeper", finding.High},
 	5672:  {"rabbitmq", "RabbitMQ", finding.Medium},
 	8086:  {"influxdb", "InfluxDB", finding.Medium},
+	11434: {"ollama", "Ollama API (no auth: anyone can run and pull models)", finding.High},
+	9042:  {"cassandra", "Cassandra", finding.High},
+	8123:  {"clickhouse", "ClickHouse HTTP", finding.High},
+	1433:  {"mssql", "Microsoft SQL Server", finding.High},
+	7474:  {"neo4j", "Neo4j", finding.Medium},
+	5900:  {"vnc", "VNC remote desktop", finding.High},
+	445:   {"smb", "SMB file sharing", finding.High},
+	111:   {"rpcbind", "rpcbind (NFS portmapper)", finding.Medium},
 	2377:  {"swarm-manager", "Docker Swarm manager API", finding.Medium},
 	7946:  {"swarm-gossip", "Docker Swarm node gossip", finding.Medium},
 }
@@ -191,7 +213,8 @@ var adminTitles = map[string]string{
 	"grafana": "Grafana", "kibana": "Kibana", "jenkins": "Jenkins", "traefik": "Traefik dashboard",
 	"rabbitmq management": "RabbitMQ management", "prometheus": "Prometheus", "n8n": "n8n", "coolify": "Coolify",
 	"dozzle": "Dozzle", "netdata": "Netdata", "webmin": "Webmin", "cockpit": "Cockpit", "mongo express": "Mongo Express",
-	"ui for apache kafka": "Kafka UI", "redisinsight": "RedisInsight",
+	"ui for apache kafka": "Kafka UI", "redisinsight": "RedisInsight", "jupyter": "Jupyter (runs code)",
+	"ray dashboard": "Ray dashboard (runs code)", "mailhog": "MailHog", "mailpit": "Mailpit",
 }
 var adminImages = map[string]string{
 	"portainer": "Portainer", "portainer-ce": "Portainer", "portainer-ee": "Portainer", "phpmyadmin": "phpMyAdmin", "adminer": "Adminer", "pgadmin4": "pgAdmin",
@@ -202,7 +225,7 @@ var adminImages = map[string]string{
 var riskyImages = map[string]int{
 	"redis": 6379, "postgres": 5432, "mysql": 3306, "mariadb": 3306, "mongo": 27017, "elasticsearch": 9200,
 	"kafka": 9092, "zookeeper": 2181, "memcached": 11211, "couchdb": 5984, "rabbitmq": 5672, "influxdb": 8086,
-	"etcd": 2379, "consul": 8500,
+	"etcd": 2379, "consul": 8500, "ollama": 11434, "cassandra": 9042, "neo4j": 7474,
 }
 
 // classify returns why a public port is dangerous, if it is.

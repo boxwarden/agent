@@ -19,18 +19,21 @@ $ sudo boxwarden scan
 
 | Check | Finds |
 |---|---|
-| `ssh` | Password and keyboard-interactive login, root login with a password, empty passwords |
-| `exposed` | Redis, Postgres, MySQL, MongoDB, Elasticsearch, Docker API, etcd, Kafka, Swarm manager and others on public interfaces, also on non-default ports; admin panels (Portainer, phpMyAdmin, Grafana, Kafka UI...); ports published by Docker or Swarm that ufw does not block; Redis answering without a password |
+| `ssh` | Password and keyboard-interactive login, root login with a password (unless root's password is locked), empty passwords |
+| `auth` | A second UID 0 account, accounts with no password, SSH keys planted in service accounts (`www-data`, `redis`, `postgres`...) |
+| `files` | `/etc/passwd`, sudoers, cron, systemd units, `PATH` directories and other root-only files writable by users or owned by non-root; readable `/etc/shadow` |
+| `updates` | End-of-life OS releases (Ubuntu Pro counts as supported), security updates waiting for a reboot, no automatic updates and nothing patched in two weeks |
+| `exposed` | Redis, Postgres, MySQL, MongoDB, Elasticsearch, Docker API, etcd, Kafka, Ollama, ClickHouse, VNC, SMB and others on public addresses, also on non-default ports; admin panels (Portainer, phpMyAdmin, Grafana, Jupyter...); ports published by Docker or Swarm that ufw does not block; Redis, Postgres, Elasticsearch, CouchDB and Memcached answering without a password. Binds to private, Tailscale and docker addresses are not "exposed" |
 | `cve` | OS packages on the host and in running containers with published security fixes; anything in [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (exploited in the wild) is critical |
-| `ioc` | Signs of compromise: new users, SSH keys, sudo/docker group members, cron jobs, systemd units, SUID binaries and listening ports since your baseline; non-empty `/etc/ld.so.preload`; processes running from `/tmp`, `/dev/shm` or a deleted binary |
+| `ioc` | Signs of compromise: new users, SSH keys, sudo/docker group members, cron jobs, systemd units, SUID binaries and listening ports since your baseline; non-empty `/etc/ld.so.preload`; crypto miners; processes posing as kernel threads; reverse shells; processes running from `/tmp`, `/dev/shm`, memory or a deleted binary; root SUID binaries in temp and home directories |
 
-Supported: Debian and Ubuntu hosts; Debian, Ubuntu and Alpine containers.
+All checks except `cve` work on any Linux (RHEL, AlmaLinux and Rocky included). `cve` covers Debian and Ubuntu hosts and Debian, Ubuntu and Alpine containers.
 
 ## Install
 
 With a Boxwarden account, the dashboard gives you a one-line install with a one-time token.
 [install.sh](install.sh) is short: read it first. It checks the binary's SHA-256, enrolls the server
-and adds systemd timers (ssh/ioc/exposed every 15 minutes, cve daily) that run with a read-only filesystem.
+and adds systemd timers (every check every 15 minutes, cve daily, resource metrics every minute) that run with a read-only filesystem.
 
 ```sh
 curl -fsSL https://github.com/boxwarden/agent/releases/latest/download/install.sh | sudo sh -s ENROLL_TOKEN https://api.boxwarden.sh
@@ -58,7 +61,9 @@ sudo boxwarden baseline   # record what "normal" looks like
 sudo boxwarden scan       # run all checks
 sudo boxwarden scan --json
 sudo boxwarden ports      # every listening port: owner, service, risk
+sudo boxwarden metrics    # CPU, memory, disks, network, busiest processes
 sudo boxwarden scan --checks ssh,exposed   # a subset
+sudo boxwarden scan --skip cve            # everything but the slow one
 sudo boxwarden scan --push  # send the report to Boxwarden cloud (after `boxwarden enroll`)
 ```
 
