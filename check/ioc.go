@@ -139,8 +139,8 @@ func Collect(root string) Snapshot {
 	}
 	// Enabling a unit adds a symlink under *.wants, so symlinks are recorded by target.
 	filepath.WalkDir(filepath.Join(root, "etc/systemd/system"), func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return nil
+		if err != nil || ownUnits[rel(root, p)] {
+			return nil // the agent's own units are checked by content instead (ownUnitFindings)
 		}
 		if d.Type()&fs.ModeSymlink != 0 {
 			target, _ := os.Readlink(p)
@@ -234,8 +234,8 @@ func Live(root string) []finding.Finding {
 			inTmp = inTmp || strings.HasPrefix(exe, d)
 		}
 		switch {
-		case strings.HasPrefix(exe, "/tmp/go-build"):
-			continue // `go run`
+		case strings.HasPrefix(exe, "/tmp/go-build"), exe == "/usr/local/bin/boxwarden (deleted)":
+			continue // `go run`; a scan still running on the agent binary an update just replaced
 		case inTmp:
 			f.Title = "Process running from a temp dir: " + exe
 			f.Detail = "PIDs " + strings.Join(ps, ", ") + ". Miners and backdoors live in /tmp and /dev/shm."
@@ -252,6 +252,7 @@ func Live(root string) []finding.Finding {
 		fs = append(fs, f)
 	}
 	fs = append(fs, processIndicators(root)...)
+	fs = append(fs, ownUnitFindings(root)...)
 	sort.Slice(fs, func(i, j int) bool { return fs[i].Title < fs[j].Title })
 	return fs
 }
