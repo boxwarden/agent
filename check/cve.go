@@ -38,22 +38,24 @@ type pkg struct {
 }
 
 type osvVuln struct {
-	ID       string   `json:"id"`
-	Aliases  []string `json:"aliases"`
-	Affected []struct {
-		Package struct {
-			Name      string `json:"name"`
-			Ecosystem string `json:"ecosystem"`
-		} `json:"package"`
-		Ranges []struct {
-			Events []map[string]string `json:"events"`
-		} `json:"ranges"`
-		EcosystemSpecific struct {
-			Binaries []struct {
-				Name string `json:"binary_name"`
-			} `json:"binaries"`
-		} `json:"ecosystem_specific"`
-	} `json:"affected"`
+	ID       string        `json:"id"`
+	Aliases  []string      `json:"aliases"`
+	Affected []osvAffected `json:"affected"`
+}
+
+type osvAffected struct {
+	Package struct {
+		Name      string `json:"name"`
+		Ecosystem string `json:"ecosystem"`
+	} `json:"package"`
+	Ranges []struct {
+		Events []map[string]string `json:"events"`
+	} `json:"ranges"`
+	EcosystemSpecific struct {
+		Binaries []struct {
+			Name string `json:"binary_name"`
+		} `json:"binaries"`
+	} `json:"ecosystem_specific"`
 }
 
 // CVE checks OS packages on the host and in running containers.
@@ -133,7 +135,11 @@ func scanPackages(target, eco string, pkgs []pkg, kev map[string]bool) ([]findin
 		}
 	}
 
-	details, err := fetchVulns(ids)
+	installed := map[string]bool{}
+	for _, p := range pkgs {
+		installed[p.src] = true
+	}
+	details, err := fetchVulns(ids, eco, installed)
 	if err != nil {
 		return nil, err
 	}
@@ -242,7 +248,9 @@ func upgradeFix(eco string, container bool, bins []string) string {
 	}
 }
 
-func fetchVulns(ids [][]string) (map[string]osvVuln, error) {
+// fetchVulns keeps only the affected entries for installed packages: an Ubuntu kernel CVE lists dozens of
+// linux-* sources with hundreds of binaries each, and thousands of those records blew past the unit's 512M.
+func fetchVulns(ids [][]string, eco string, installed map[string]bool) (map[string]osvVuln, error) {
 	out := map[string]osvVuln{}
 	var (
 		mu       sync.Mutex
@@ -257,11 +265,18 @@ func fetchVulns(ids [][]string) (map[string]osvVuln, error) {
 				continue
 			}
 			seen[id] = true
+			sem <- struct{}{} // before spawning: thousands of parked goroutines cost memory too
 			wg.Go(func() {
-				sem <- struct{}{}
 				defer func() { <-sem }()
 				var v osvVuln
 				err := getJSON(osvURL+"/v1/vulns/"+id, nil, &v)
+				var keep []osvAffected // a fresh slice, so the dropped entries' backing array is freed
+				for _, a := range v.Affected {
+					if a.Package.Ecosystem == eco && installed[a.Package.Name] {
+						keep = append(keep, a)
+					}
+				}
+				v.Affected = keep
 				mu.Lock()
 				defer mu.Unlock()
 				if err != nil && firstErr == nil {

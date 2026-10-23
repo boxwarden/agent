@@ -158,6 +158,7 @@ ProtectHome=read-only
 NoNewPrivileges=yes
 TimeoutStartSec=15min
 MemoryMax=512M
+Environment=GOMEMLIMIT=384MiB
 Nice=10
 EOF
 	}
