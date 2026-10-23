@@ -50,7 +50,8 @@ const iocFix = "If you didn't make this change, assume compromise: isolate the s
 
 // IOC compares the host against the saved baseline and adds live indicators that need no baseline.
 func IOC() ([]finding.Finding, error) {
-	fs := Live("/")
+	snap := Collect("/")
+	fs := append(Live("/"), suidUnusual("/", snap)...)
 	base, err := LoadBaseline(BaselinePath)
 	if errors.Is(err, os.ErrNotExist) {
 		return append(fs, finding.Finding{
@@ -62,7 +63,7 @@ func IOC() ([]finding.Finding, error) {
 	if err != nil {
 		return nil, err
 	}
-	return append(fs, Diff(base, Collect("/"))...), nil
+	return append(fs, Diff(base, snap)...), nil
 }
 
 func LoadBaseline(path string) (Snapshot, error) {
@@ -121,8 +122,7 @@ func Collect(root string) Snapshot {
 
 	for user, home := range collectUsers(root, s["user"]) {
 		for _, name := range []string{"authorized_keys", "authorized_keys2"} {
-			b, _ := os.ReadFile(filepath.Join(root, home, ".ssh", name))
-			for line := range strings.SplitSeq(string(b), "\n") {
+			for line := range strings.SplitSeq(readFile(root, filepath.Join(home, ".ssh", name)), "\n") {
 				if fp := keyFingerprint(line); fp != "" {
 					s["ssh-key"][user+" "+fp] = filepath.Join(home, ".ssh", name)
 				}
@@ -179,8 +179,7 @@ type socket struct{ addr, inode string }
 func listening(root string) []socket {
 	var socks []socket
 	for _, proto := range []string{"tcp", "tcp6"} {
-		b, _ := os.ReadFile(filepath.Join(root, "proc/net", proto))
-		for line := range strings.SplitSeq(string(b), "\n") {
+		for line := range strings.SplitSeq(readFile(root, "proc/net/"+proto), "\n") {
 			f := strings.Fields(line)
 			if len(f) < 4 || f[3] != "0A" {
 				continue
@@ -197,11 +196,14 @@ func listening(root string) []socket {
 	return socks
 }
 
+// World-writable places nothing legit runs from. Homes aren't here: people run their own tools there.
+var tempDirs = []string{"/tmp/", "/var/tmp/", "/dev/shm/", "/run/shm/", "/run/user/", "/run/lock/", "/var/lock/", "/dev/mqueue/"}
+
 // Live finds indicators that are suspicious on their own, without a baseline.
 func Live(root string) []finding.Finding {
 	var fs []finding.Finding
 
-	if b, _ := os.ReadFile(filepath.Join(root, "etc/ld.so.preload")); strings.TrimSpace(string(b)) != "" {
+	if strings.TrimSpace(readFile(root, "etc/ld.so.preload")) != "" {
 		fs = append(fs, finding.Finding{
 			ID: "ioc.ld-preload", Severity: finding.High,
 			Title:  "/etc/ld.so.preload is not empty",
@@ -223,23 +225,55 @@ func Live(root string) []finding.Finding {
 		pids[exe] = append(pids[exe], e.Name())
 	}
 	for exe, ps := range pids {
-		inTmp := strings.HasPrefix(exe, "/tmp/") || strings.HasPrefix(exe, "/dev/shm/") || strings.HasPrefix(exe, "/var/tmp/")
-		deleted := strings.HasSuffix(exe, " (deleted)")
-		if !inTmp && !deleted {
-			continue
-		}
 		f := finding.Finding{
 			ID: "ioc.suspicious-process", Severity: finding.High,
-			Title:  "Process running from a temp dir: " + exe,
-			Detail: "PIDs " + strings.Join(ps, ", ") + ". Miners and backdoors live in /tmp and /dev/shm.",
-			Fix:    "cat /proc/" + ps[0] + "/cmdline | tr '\\0' ' '; ls -l /proc/" + ps[0] + "/cwd",
+			Fix: "cat /proc/" + ps[0] + "/cmdline | tr '\\0' ' '; ls -l /proc/" + ps[0] + "/cwd",
 		}
-		if !inTmp {
-			f.Severity = finding.Medium
+		inTmp := false
+		for _, d := range tempDirs {
+			inTmp = inTmp || strings.HasPrefix(exe, d)
+		}
+		switch {
+		case strings.HasPrefix(exe, "/tmp/go-build"):
+			continue // `go run`
+		case inTmp:
+			f.Title = "Process running from a temp dir: " + exe
+			f.Detail = "PIDs " + strings.Join(ps, ", ") + ". Miners and backdoors live in /tmp and /dev/shm."
+		case strings.HasPrefix(exe, "/memfd:") && !strings.Contains(exe, "runc"):
+			f.Title = "Process running from memory, with no file on disk: " + exe
+			f.Detail = "PIDs " + strings.Join(ps, ", ") + ". Fileless malware runs this way to leave nothing to scan. runc does it too, which is excluded."
+		case strings.HasSuffix(exe, " (deleted)"):
+			f.Severity = finding.Low
 			f.Title = "Process running from a deleted binary: " + exe
-			f.Detail = "PIDs " + strings.Join(ps, ", ") + ". Normal right after a package upgrade (restart the service); otherwise malware hiding its file."
+			f.Detail = "PIDs " + strings.Join(ps, ", ") + ". Usually an upgrade replaced it and the service needs a restart to run the fixed code; if no upgrade touched it, malware is hiding its file."
+		default:
+			continue
 		}
 		fs = append(fs, f)
+	}
+	fs = append(fs, processIndicators(root)...)
+	sort.Slice(fs, func(i, j int) bool { return fs[i].Title < fs[j].Title })
+	return fs
+}
+
+// suidUnusual: a root SUID binary where only users write is a planted root shell; no baseline needed.
+func suidUnusual(root string, snap Snapshot) []finding.Finding {
+	var fs []finding.Finding
+	for p := range snap["suid"] {
+		unusual := strings.HasPrefix(p, "/home/") || strings.HasPrefix(p, "/var/www/") || strings.HasPrefix(p, "/srv/")
+		for _, d := range tempDirs {
+			unusual = unusual || strings.HasPrefix(p, d)
+		}
+		info, err := os.Lstat(filepath.Join(root, p))
+		if !unusual || err != nil || ownerUID(info) != rootUID {
+			continue
+		}
+		fs = append(fs, finding.Finding{
+			ID: "ioc.suid-unusual", Severity: finding.Critical,
+			Title:  "Root SUID binary in a user-writable place: " + p,
+			Detail: "Anyone who runs it becomes root. Attackers leave these behind to get root back.",
+			Fix:    "ls -l " + shQuote(p) + "; sudo rm " + shQuote(p) + "   # then assume compromise",
+		})
 	}
 	sort.Slice(fs, func(i, j int) bool { return fs[i].Title < fs[j].Title })
 	return fs
@@ -247,8 +281,7 @@ func Live(root string) []finding.Finding {
 
 func collectUsers(root string, users map[string]string) (homes map[string]string) {
 	homes = map[string]string{}
-	b, _ := os.ReadFile(filepath.Join(root, "etc/passwd"))
-	for line := range strings.SplitSeq(string(b), "\n") {
+	for line := range strings.SplitSeq(readFile(root, "etc/passwd"), "\n") {
 		f := strings.Split(line, ":")
 		if len(f) < 7 {
 			continue
@@ -262,8 +295,7 @@ func collectUsers(root string, users map[string]string) (homes map[string]string
 }
 
 func collectSudoMembers(root string, m map[string]string) {
-	b, _ := os.ReadFile(filepath.Join(root, "etc/group"))
-	for line := range strings.SplitSeq(string(b), "\n") {
+	for line := range strings.SplitSeq(readFile(root, "etc/group"), "\n") {
 		f := strings.Split(line, ":")
 		// docker group can mount / into a container, so it is root too.
 		if len(f) < 4 || f[0] != "sudo" && f[0] != "wheel" && f[0] != "admin" && f[0] != "docker" || f[3] == "" {
@@ -310,11 +342,8 @@ func procAddr(s string) string {
 }
 
 func hashInto(root, p string, m map[string]string) {
-	b, err := os.ReadFile(p)
-	if err != nil {
-		return
-	}
-	sum := sha256.Sum256(b)
+	b := readFile(root, rel(root, p))
+	sum := sha256.Sum256([]byte(b))
 	m[rel(root, p)] = hex.EncodeToString(sum[:])
 }
 

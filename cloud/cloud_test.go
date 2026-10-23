@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/boxwarden/agent/finding"
@@ -57,5 +58,13 @@ func TestEnrollAndPush(t *testing.T) {
 	}
 	if got.Hostname != "vps1" || len(got.Findings) != 1 {
 		t.Errorf("server got %+v", got)
+	}
+}
+
+func TestEnrollRefusesPlainHTTP(t *testing.T) {
+	for _, s := range []string{"http://localhost.evil.com", "http://127.0.0.1.nip.io", "http://example.com", "ftp://x"} {
+		if err := Enroll(s, "t", "h"); err == nil || !strings.Contains(err.Error(), "https") {
+			t.Errorf("%s: %v", s, err)
+		}
 	}
 }

@@ -10,7 +10,7 @@ import (
 func TestSSHDFindings(t *testing.T) {
 	sev := func(cfg string, rootKeys bool) map[string]finding.Finding {
 		m := map[string]finding.Finding{}
-		for _, f := range sshdFindings(cfg, rootKeys) {
+		for _, f := range sshdFindings(cfg, rootKeys, false) {
 			m[f.ID] = f
 		}
 		return m
@@ -58,5 +58,13 @@ func TestRootHasKeys(t *testing.T) {
 	write(t, root, "root/.ssh/authorized_keys", "ssh-ed25519 aGVsbG8= me@mac\n")
 	if !rootHasKeys(root) {
 		t.Error("key not detected")
+	}
+}
+
+func TestRootLockedSkipsRootPasswordLogin(t *testing.T) {
+	for _, f := range sshdFindings("permitrootlogin yes\npasswordauthentication yes\n", false, true) {
+		if f.ID == "ssh.root-password-login" {
+			t.Error("root has no usable password: it can't log in with one")
+		}
 	}
 }

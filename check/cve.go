@@ -305,8 +305,7 @@ func containers(root string) map[string]string {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue
 		}
-		b, _ := os.ReadFile(filepath.Join(root, "proc", e.Name(), "cgroup"))
-		if id := containerRe.FindString(string(b)); id != "" && out[id] == "" {
+		if id := containerRe.FindString(readFile(root, "proc/"+e.Name()+"/cgroup")); id != "" && out[id] == "" {
 			out[id] = e.Name()
 		}
 	}
@@ -419,9 +418,4 @@ func stanza(s, sep string) map[string]string {
 		}
 	}
 	return m
-}
-
-func readFile(root, path string) string {
-	b, _ := os.ReadFile(filepath.Join(root, path))
-	return string(b)
 }

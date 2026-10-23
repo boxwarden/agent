@@ -37,20 +37,21 @@ func fingerprint(addr string) string {
 }
 
 func banner(b []byte) string {
+	if len(b) > 5 && b[4] == 10 { // MySQL handshake: 3-byte length, seq id, protocol version 10
+		return "mysql"
+	}
 	line, _, _ := strings.Cut(string(b), "\n")
 	line = strings.TrimSpace(line)
+	for _, r := range line {
+		if r < 0x20 || r > 0x7e {
+			return "binary protocol"
+		}
+	}
 	switch {
 	case strings.HasPrefix(line, "SSH-"):
 		return "ssh " + line
 	case strings.HasPrefix(line, "220"):
 		return "smtp/ftp " + line
-	case len(b) > 5 && b[4] == 10: // MySQL handshake: 3-byte length, seq id, protocol version 10
-		return "mysql"
-	}
-	for _, r := range line {
-		if r < 0x20 || r > 0x7e {
-			return "binary protocol"
-		}
 	}
 	return "banner " + line[:min(60, len(line))]
 }
