@@ -39,6 +39,13 @@ and adds systemd timers (every check every 15 minutes, cve daily, resource metri
 curl -fsSL https://github.com/boxwarden/agent/releases/latest/download/install.sh | sudo sh -s ENROLL_TOKEN https://api.boxwarden.sh
 ```
 
+To update the agent on a server that is already connected, run the installer without a token.
+It replaces the binary and the systemd units and keeps the connection and the baseline:
+
+```sh
+curl -fsSL https://github.com/boxwarden/agent/releases/latest/download/install.sh | sudo sh
+```
+
 Releases are built by [GitHub Actions](.github/workflows/release.yml) from the tag, with no build cache,
 and carry signed build provenance. To check that a binary came from this repo's workflow:
 
