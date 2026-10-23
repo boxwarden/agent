@@ -1,11 +1,14 @@
 package check
 
 import (
+	"bytes"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/boxwarden/agent/finding"
@@ -62,6 +65,9 @@ func metrics(root string, sample time.Duration) finding.Metrics {
 			m.OOMKills, _ = strconv.ParseUint(n, 10, 64)
 		}
 	}
+	if m.OOMKills > 0 {
+		m.OOMVictims = oomVictims(kmsgKills(filepath.Join(root, "dev/kmsg")), m.BootTime)
+	}
 	m.NetRx, m.NetTx = netBytes(root)
 	m.Disks = disks(root)
 
@@ -70,6 +76,51 @@ func metrics(root string, sample time.Duration) finding.Metrics {
 	}
 	m.Top = topProcs(root, before, procTimes(root), time.Since(start))
 	return m
+}
+
+var oomRe = regexp.MustCompile(`Killed process (\d+) \((.{1,64}?)\).*?anon-rss:(\d+)kB`)
+
+// kmsgKills returns the kernel log records that mention a kill, one per line; "" without root.
+// Raw syscalls: os.File would hand the fd to the poller and block at the end of the log.
+func kmsgKills(path string) string {
+	fd, err := syscall.Open(path, syscall.O_RDONLY|syscall.O_NONBLOCK|syscall.O_CLOEXEC, 0)
+	if err != nil {
+		return ""
+	}
+	defer syscall.Close(fd)
+	var out bytes.Buffer
+	buf := make([]byte, 8192) // one record per read
+	for range 1 << 20 {
+		n, err := syscall.Read(fd, buf)
+		if err == syscall.EPIPE {
+			continue // a record got overwritten while we read
+		}
+		if err != nil || n <= 0 {
+			break // EAGAIN: the end of the log
+		}
+		if bytes.Contains(buf[:n], []byte("Killed process")) {
+			out.Write(buf[:n])
+		}
+	}
+	return out.String()
+}
+
+// oomVictims parses /dev/kmsg records ("6,seq,usec,-;text") into the five newest OOM kills.
+func oomVictims(log string, boot int64) []finding.OOMVictim {
+	var out []finding.OOMVictim
+	for line := range strings.SplitSeq(log, "\n") {
+		hdr, msg, _ := strings.Cut(line, ";")
+		f := strings.Split(hdr, ",")
+		m := oomRe.FindStringSubmatch(msg)
+		if m == nil || len(f) < 3 {
+			continue
+		}
+		usec, _ := strconv.ParseInt(f[2], 10, 64)
+		pid, _ := strconv.Atoi(m[1])
+		kb, _ := strconv.ParseUint(m[3], 10, 64)
+		out = append(out, finding.OOMVictim{At: boot + usec/1e6, PID: pid, Name: finding.Clean(m[2], 64), RSS: kb * 1024})
+	}
+	return out[max(0, len(out)-5):]
 }
 
 // netBytes sums traffic on physical interfaces (those with a device behind them), so traffic that

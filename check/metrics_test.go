@@ -38,3 +38,14 @@ func TestMetrics(t *testing.T) {
 		t.Errorf("top: %+v", top)
 	}
 }
+
+func TestOOMVictims(t *testing.T) {
+	log := "3,812,99000000,-;Memory cgroup out of memory: Killed process 575672 (boxwarden) total-vm:1767192kB, anon-rss:522892kB, file-rss:6272kB, shmem-rss:0kB, UID:0 pgtables:1144kB oom_score_adj:0\n" +
+		" SUBSYSTEM=memory\n" +
+		"3,900,120500000,-;Out of memory: Killed process 42 (my app) total-vm:10kB, anon-rss:2048kB, file-rss:0kB\n"
+	v := oomVictims(log, 1000)
+	if len(v) != 2 || v[0].Name != "boxwarden" || v[0].PID != 575672 || v[0].RSS != 522892*1024 || v[0].At != 1099 ||
+		v[1].Name != "my app" || v[1].At != 1120 {
+		t.Errorf("victims: %+v", v)
+	}
+}
