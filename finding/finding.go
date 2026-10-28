@@ -89,6 +89,7 @@ type Metrics struct {
 	NetTx        uint64      `json:"net_tx"`
 	OOMKills     uint64      `json:"oom_kills"`             // since boot
 	OOMVictims   []OOMVictim `json:"oom_victims,omitempty"` // the newest kills still in the kernel log
+	Logins       []Login     `json:"logins,omitempty"`      // SSH logins in the last 15 minutes, oldest first
 	Top          []Proc      `json:"top"`                   // busiest processes during a one-second sample
 }
 
@@ -115,6 +116,16 @@ type OOMVictim struct {
 	PID  int    `json:"pid"`
 	Name string `json:"name"`
 	RSS  uint64 `json:"rss"` // bytes, anon-rss when it was killed
+}
+
+// Login is a successful SSH login, from auth.log (or secure) or, where there is no such log, wtmp.
+// The cloud alerts on the first login from a network it hasn't seen for that user.
+type Login struct {
+	At     int64  `json:"at"` // unix seconds
+	User   string `json:"user"`
+	From   string `json:"from"`             // IP address
+	Method string `json:"method,omitempty"` // publickey, password, keyboard-interactive; unknown from wtmp
+	Key    string `json:"key,omitempty"`    // SHA256 fingerprint of the key that logged in
 }
 
 type Proc struct {

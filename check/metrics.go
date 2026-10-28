@@ -70,6 +70,13 @@ func metrics(root string, sample time.Duration) finding.Metrics {
 	}
 	m.NetRx, m.NetTx = netBytes(root)
 	m.Disks = disks(root)
+	m.Logins = recentLogins(root, time.Now())
+	if len(m.Logins) > 20 { // a deploy script logging in every few seconds
+		m.Logins = m.Logins[len(m.Logins)-20:]
+	}
+	for i := range m.Logins {
+		m.Logins[i].User, m.Logins[i].Key = finding.Clean(m.Logins[i].User, 64), finding.Clean(m.Logins[i].Key, 100)
+	}
 
 	if wait := sample - time.Since(start); wait > 0 {
 		time.Sleep(wait)

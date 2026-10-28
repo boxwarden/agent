@@ -71,7 +71,7 @@ sudo boxwarden baseline   # record what "normal" looks like
 sudo boxwarden scan       # run all checks
 sudo boxwarden scan --json
 sudo boxwarden ports      # every listening port: owner, service, risk
-sudo boxwarden metrics    # CPU, memory, disks, network, busiest processes
+sudo boxwarden metrics    # CPU, memory, disks, network, busiest processes, SSH logins of the last 15 minutes
 sudo boxwarden scan --checks ssh,exposed   # a subset
 sudo boxwarden scan --skip cve            # everything but the slow one
 sudo boxwarden scan --push  # send the report to Boxwarden cloud (after `boxwarden enroll`)
@@ -101,7 +101,8 @@ Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 - **Keeps your secrets on the server.** The baseline stores names and hashes, not file contents.
 
 With `--push`, the report (findings and the port inventory: names, no file contents) goes to the
-Boxwarden server you enrolled with. The agent never accepts commands back.
+Boxwarden server you enrolled with. Metrics also carry recent SSH logins (user, source IP, method,
+key fingerprint), so the cloud can alert on a login from a network that user never came from. The agent never accepts commands back.
 
 Apart from that, only the `cve` check talks to the outside: it sends installed OS package names and versions
 to [OSV.dev](https://osv.dev) and downloads the CISA KEV list. Nothing else leaves the machine.
