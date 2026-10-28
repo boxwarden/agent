@@ -29,7 +29,7 @@ const usage = `usage:
                            connect this server to your Boxwarden account (- reads the token from stdin)`
 
 // Check names equal finding ID prefixes ("ssh.password-auth"), so the cloud knows which findings a report covers.
-var allChecks = []string{"ssh", "auth", "files", "updates", "ioc", "exposed", "cve"}
+var allChecks = []string{"ssh", "auth", "files", "updates", "ioc", "integrity", "docker", "tls", "exposed", "cve"}
 
 func main() {
 	if len(os.Args) < 2 {
@@ -172,13 +172,16 @@ func scan(args []string) {
 		inventory = check.Inventory(true)
 	}
 	run := map[string]func() ([]finding.Finding, error){
-		"ssh":     check.SSHD,
-		"auth":    check.Auth,
-		"files":   check.Files,
-		"updates": check.Updates,
-		"ioc":     check.IOC,
-		"exposed": func() ([]finding.Finding, error) { return check.ExposedIn(inventory), nil },
-		"cve":     check.CVE,
+		"ssh":       check.SSHD,
+		"auth":      check.Auth,
+		"files":     check.Files,
+		"updates":   check.Updates,
+		"ioc":       check.IOC,
+		"integrity": check.Integrity,
+		"docker":    check.Docker,
+		"tls":       check.TLS,
+		"exposed":   func() ([]finding.Finding, error) { return check.ExposedIn(inventory), nil },
+		"cve":       check.CVE,
 	}
 
 	report := finding.Report{AgentVersion: version, Findings: []finding.Finding{}}
