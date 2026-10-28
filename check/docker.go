@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"regexp"
 	"time"
 )
 
@@ -16,6 +17,8 @@ var dockerAllowed = map[string]bool{
 	"/containers/json": true,
 	"/services":        true,
 }
+
+var dockerInspectPath = regexp.MustCompile(`^/containers/[0-9a-f]{64}/json$`)
 
 type dockerContainer struct {
 	ID     string `json:"Id"`
@@ -48,7 +51,7 @@ type dockerService struct {
 
 // dockerGet reads the Docker API over its unix socket. Errors (no Docker, not a Swarm manager) are normal.
 func dockerGet(path string, out any) error {
-	if !dockerAllowed[path] {
+	if !dockerAllowed[path] && !dockerInspectPath.MatchString(path) {
 		return fmt.Errorf("docker API %s is not allowed: the agent is read-only", path)
 	}
 	c := http.Client{

@@ -25,9 +25,12 @@ $ sudo boxwarden scan
 | `updates` | End-of-life OS releases (Ubuntu Pro counts as supported), security updates waiting for a reboot, no automatic updates and nothing patched in two weeks |
 | `exposed` | Redis, Postgres, MySQL, MongoDB, Elasticsearch, Docker API, etcd, Kafka, Ollama, ClickHouse, VNC, SMB and others on public addresses, also on non-default ports; admin panels (Portainer, phpMyAdmin, Grafana, Jupyter...); ports published by Docker or Swarm that ufw does not block; Redis, Postgres, Elasticsearch, CouchDB and Memcached answering without a password. Binds to private, Tailscale and docker addresses are not "exposed" |
 | `cve` | OS packages on the host and in running containers with published security fixes; anything in [CISA KEV](https://www.cisa.gov/known-exploited-vulnerabilities-catalog) (exploited in the wild) is critical |
-| `ioc` | Signs of compromise: new users, SSH keys, sudo/docker group members, cron jobs, systemd units, SUID binaries and listening ports since your baseline; non-empty `/etc/ld.so.preload`; crypto miners; processes posing as kernel threads; reverse shells; processes running from `/tmp`, `/dev/shm`, memory or a deleted binary; root SUID binaries in temp and home directories |
+| `ioc` | Signs of compromise: new users, SSH keys, sudo/docker group members, cron jobs, systemd units, SUID binaries and listening ports since your baseline; non-empty `/etc/ld.so.preload`; crypto miners, also renamed ones connected to a mining pool; processes posing as kernel threads; reverse shells; processes running from `/tmp`, `/dev/shm`, memory or a deleted binary; root SUID binaries in temp and home directories |
+| `integrity` | `sshd`, `sudo`, `su`, `ps`, `ls`, `ss`, `netstat`, PAM modules and other binaries rootkits replace, checked against the MD5s dpkg recorded at install |
+| `docker` | Containers that hand the host to whoever breaks into them: privileged, `SYS_ADMIN`-level capabilities, the Docker socket mounted, `/`, `/etc` or `/root` of the host mounted writable |
+| `tls` | Let's Encrypt certificates (certbot, Caddy) that expired or that renewal has stopped replacing |
 
-All checks except `cve` work on any Linux (RHEL, AlmaLinux and Rocky included). `cve` covers Debian and Ubuntu hosts and Debian, Ubuntu and Alpine containers.
+All checks except `cve` and `integrity` work on any Linux (RHEL, AlmaLinux and Rocky included). `cve` covers Debian and Ubuntu hosts and Debian, Ubuntu and Alpine containers; `integrity` covers Debian and Ubuntu.
 
 ## Install
 
@@ -68,7 +71,7 @@ sudo boxwarden baseline   # record what "normal" looks like
 sudo boxwarden scan       # run all checks
 sudo boxwarden scan --json
 sudo boxwarden ports      # every listening port: owner, service, risk
-sudo boxwarden metrics    # CPU, memory, disks, network, busiest processes
+sudo boxwarden metrics    # CPU, memory, disks, network, busiest processes, SSH logins of the last 15 minutes
 sudo boxwarden scan --checks ssh,exposed   # a subset
 sudo boxwarden scan --skip cve            # everything but the slow one
 sudo boxwarden scan --push  # send the report to Boxwarden cloud (after `boxwarden enroll`)
@@ -98,7 +101,8 @@ Exit code is 1 if a check could not run (for example without root), 0 otherwise.
 - **Keeps your secrets on the server.** The baseline stores names and hashes, not file contents.
 
 With `--push`, the report (findings and the port inventory: names, no file contents) goes to the
-Boxwarden server you enrolled with. The agent never accepts commands back.
+Boxwarden server you enrolled with. Metrics also carry recent SSH logins (user, source IP, method,
+key fingerprint), so the cloud can alert on a login from a network that user never came from. The agent never accepts commands back.
 
 Apart from that, only the `cve` check talks to the outside: it sends installed OS package names and versions
 to [OSV.dev](https://osv.dev) and downloads the CISA KEV list. Nothing else leaves the machine.

@@ -252,6 +252,7 @@ func Live(root string) []finding.Finding {
 		fs = append(fs, f)
 	}
 	fs = append(fs, processIndicators(root)...)
+	fs = append(fs, poolConnections(root)...)
 	fs = append(fs, ownUnitFindings(root)...)
 	sort.Slice(fs, func(i, j int) bool { return fs[i].Title < fs[j].Title })
 	return fs
