@@ -29,8 +29,10 @@ var (
 		"Description": true, "After": true, "Wants": true, "Type": true, "ExecStart": true,
 		"ProtectSystem": true, "ProtectHome": true, "NoNewPrivileges": true, "TimeoutStartSec": true, "MemoryMax": true, "Nice": true,
 		"OnBootSec": true, "OnUnitActiveSec": true, "RandomizedDelaySec": true, "OnCalendar": true, "Persistent": true,
-		"AccuracySec": true, "WantedBy": true,
+		"AccuracySec": true, "WantedBy": true, "Environment": true,
 	}
+	// Environment is an injection vector (LD_PRELOAD, PATH), so only the one value install.sh writes (since v0.2.3).
+	ownEnv = "GOMEMLIMIT=384MiB"
 )
 
 // ownUnitFindings reports Boxwarden units that contain anything install.sh doesn't write.
@@ -67,6 +69,8 @@ func unitProblem(unit string) string {
 		switch {
 		case !ownKeys[k]:
 			return k + "="
+		case k == "Environment" && v != ownEnv:
+			return "Environment=" + v
 		case k == "ExecStart" && !ownExec.MatchString(v):
 			return "ExecStart=" + v
 		}

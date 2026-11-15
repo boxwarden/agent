@@ -161,3 +161,85 @@ func TestFingerprint(t *testing.T) {
 		}
 	}
 }
+
+func TestOrchestratorPortsStayOutOfBaseline(t *testing.T) {
+	root := t.TempDir()
+	hexID := strings.Repeat("ab", 32)    // host-network container, known to Docker
+	bridgeID := strings.Repeat("cd", 32) // bridge container, known to Docker
+	ghostID := strings.Repeat("ef", 32)  // not in /var/lib/docker/containers
+	row := func(n, addr, inode string) string {
+		return n + ": " + addr + " 00000000:0000 0A 00000000:00000000 00:00000000 00000000 0 0 " + inode + " 1\n"
+	}
+	proc := func(pid, uid, exe, cgroup, inode string) {
+		write(t, root, "proc/"+pid+"/cgroup", cgroup)
+		write(t, root, "proc/"+pid+"/status", "Name:\tx\nUid:\t"+uid+"\t"+uid+"\t"+uid+"\t"+uid+"\n")
+		os.Symlink(exe, filepath.Join(root, "proc", pid, "exe"))
+		if inode != "" {
+			os.MkdirAll(filepath.Join(root, "proc", pid, "fd"), 0o755)
+			os.Symlink("socket:["+inode+"]", filepath.Join(root, "proc", pid, "fd", "3"))
+		}
+	}
+	write(t, root, "var/lib/docker/containers/"+hexID+"/hostconfig.json", `{"NetworkMode":"host"}`)
+	write(t, root, "var/lib/docker/containers/"+bridgeID+"/hostconfig.json", `{"NetworkMode":"bridge","PortBindings":{"80/tcp":[{"HostIp":"10.114.112.16","HostPort":"24727"}]}}`)
+	nomad := `{"Config":{"Labels":{"com.hashicorp.nomad.alloc_id":"2e3888c4"}}}`
+	write(t, root, "var/lib/docker/containers/"+hexID+"/config.v2.json", nomad)
+	write(t, root, "var/lib/docker/containers/"+bridgeID+"/config.v2.json", nomad)
+	// Started by a docker-group user, not by Nomad: no label.
+	plainHost, plainBridge := strings.Repeat("12", 32), strings.Repeat("34", 32)
+	write(t, root, "var/lib/docker/containers/"+plainHost+"/config.v2.json", `{"Config":{"Labels":{}}}`)
+	write(t, root, "var/lib/docker/containers/"+plainHost+"/hostconfig.json", `{"NetworkMode":"host"}`)
+	write(t, root, "var/lib/docker/containers/"+plainBridge+"/config.v2.json", `{"Config":{}}`)
+	write(t, root, "var/lib/docker/containers/"+plainBridge+"/hostconfig.json", `{"NetworkMode":"bridge","PortBindings":{"22/tcp":[{"HostIp":"","HostPort":"2222"}]}}`)
+	sys := "0::/system.slice/docker.service\n"
+	ctr := func(id string) string { return "0::/system.slice/docker-" + id + ".scope\n" }
+	proc("10", "0", "/usr/local/bin/nomad", "0::/system.slice/nomad.service\n", "")
+	proc("20", "0", "/usr/bin/docker-proxy", sys, "2001")                                                                              // published, in PortBindings
+	proc("21", "0", "/usr/bin/docker-proxy", "0::/system.slice/evil.service\n", "2002")                                                // wrong cgroup
+	proc("22", "0", "/tmp/docker-proxy", sys, "2003")                                                                                  // wrong exe path
+	proc("23", "0", "/app/server", ctr(hexID), "2004")                                                                                 // host-network task in range
+	proc("24", "0", "/app/server", ctr(hexID), "2005")                                                                                 // host-network, outside the range
+	proc("25", "0", "/usr/bin/docker-proxy", ctr(bridgeID), "2006")                                                                    // forged path inside a container
+	proc("26", "0", "/usr/sbin/sshd", "0::/system.slice/ssh.service\n", "2007")                                                        // someone else on a dynamic port
+	proc("27", "1000", "/usr/bin/docker-proxy", "0::/user.slice/user-1000.slice/user@1000.service/app.slice/docker.service\n", "2008") // systemd-run --user --unit=docker.service
+	proc("28", "1000", "/usr/bin/docker-proxy", sys, "2009")                                                                           // same, but pretending a root cgroup
+	proc("29", "1000", "/tmp/backdoor", "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-"+hexID+".scope\n", "2010")    // user scope named with 64 hex
+	proc("30", "0", "/app/server", ctr(ghostID), "2011")                                                                               // container id Docker doesn't know
+	proc("31", "0", "/app/server", ctr(bridgeID), "2012")                                                                              // bridge container: not host network
+	proc("32", "0", "/usr/bin/docker-proxy", sys, "2013")                                                                              // port not in any PortBindings
+	proc("33", "0", "/app/backdoor", ctr(plainHost), "2014")                                                                           // docker run --network host, in the range
+	proc("34", "0", "/usr/bin/docker-proxy", sys, "2015")                                                                              // docker run -p 2222:22
+	write(t, root, "proc/net/tcp", tcpHeader+
+		row("0", "1070720A:6097", "2001")+ // 10.114.112.16:24727 docker-proxy
+		row("1", "0100007F:6098", "2002")+ // 127.0.0.1:24728
+		row("2", "0100007F:6099", "2003")+ // 127.0.0.1:24729
+		row("3", "1070720A:609A", "2004")+ // 10.114.112.16:24730 host-network task
+		row("4", "0100007F:1F90", "2005")+ // 127.0.0.1:8080
+		row("5", "0100007F:1F91", "2006")+ // 127.0.0.1:8081
+		row("6", "0100007F:609C", "2007")+ // 127.0.0.1:24732
+		row("7", "0100007F:609D", "9999")+ // owner unknown, 127.0.0.1:24733
+		row("9", "0100007F:609E", "2009")+ // 127.0.0.1:24734
+		row("A", "0100007F:609F", "2010")+ // 127.0.0.1:24735
+		row("B", "0100007F:60A0", "2011")+ // 127.0.0.1:24736
+		row("C", "0100007F:60A1", "2012")+ // 127.0.0.1:24737
+		row("D", "0100007F:60A2", "2013")+ // 127.0.0.1:24738
+		row("E", "0100007F:60A3", "2014")+ // 127.0.0.1:24739
+		row("F", "00000000:08AE", "2015")) // 0.0.0.0:2222
+	got := Collect(root)["port"]
+	for _, a := range []string{"10.114.112.16:24727", "10.114.112.16:24730"} {
+		if _, ok := got["tcp "+a]; ok {
+			t.Errorf("orchestrator port %s must not be in the baseline", a)
+		}
+	}
+	for _, a := range []string{"127.0.0.1:24728", "127.0.0.1:24729", "127.0.0.1:8080", "127.0.0.1:8081", "127.0.0.1:24732", "127.0.0.1:24733",
+		"127.0.0.1:24734", "127.0.0.1:24735", "127.0.0.1:24736", "127.0.0.1:24737", "127.0.0.1:24738", "127.0.0.1:24739", "0.0.0.0:2222"} {
+		if _, ok := got["tcp "+a]; !ok {
+			t.Errorf("%s must still alert", a)
+		}
+	}
+
+	// Without a Nomad agent, a host-network container's port in the range is not excused.
+	os.Remove(filepath.Join(root, "proc/10/exe"))
+	if _, ok := Collect(root)["port"]["tcp 10.114.112.16:24730"]; !ok {
+		t.Error("container port without nomad must alert")
+	}
+}

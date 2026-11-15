@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -77,25 +78,79 @@ func cves(root string) ([]finding.Finding, error) {
 		kev[v.CveID] = true
 	}
 
-	targets := map[string]string{"Host": root}
-	for id, pid := range containers(root) {
-		targets["Container "+containerLabel(root, id)] = filepath.Join(root, "proc", pid, "root")
+	// Findings are keyed by image tag, not container name: Nomad names containers after the allocation
+	// UUID, so every redeploy of the same image would otherwise be a new finding plus a "fixed" one.
+	// The identity is always the tag, whatever else runs on the host. Containers are scanned once per
+	// image ID (":latest" pulled twice is two filesystems) and the findings of one tag are merged.
+	type image struct {
+		troot string
+		names []string
+	}
+	type target struct {
+		images map[string]*image // image ID -> one container's root
+		names  []string
+	}
+	targets := map[string]*target{"Host": {images: map[string]*image{"": {troot: root}}}}
+	cs := containers(root)
+	for _, id := range slices.Sorted(maps.Keys(cs)) {
+		name, tag, imageID := containerLabel(root, id)
+		if imageID == "" {
+			imageID = "tag:" + tag // ponytail: no image ID in Docker's state: the tag is all we have
+		}
+		t := targets["Container "+tag]
+		if t == nil {
+			t = &target{images: map[string]*image{}}
+			targets["Container "+tag] = t
+		}
+		if t.images[imageID] == nil {
+			t.images[imageID] = &image{troot: filepath.Join(root, "proc", cs[id], "root")}
+		}
+		t.names = append(t.names, name)
 	}
 
 	var fs []finding.Finding
-	for name, troot := range targets {
-		eco, pkgs := packages(troot)
-		if eco == "" || len(pkgs) == 0 {
-			continue // ponytail: Debian/Ubuntu/Alpine only, RHEL family is post-MVP
+	for name, t := range targets {
+		merged := map[string]finding.Finding{} // by fingerprint: the same problem in two images is one finding, worst wins
+		for _, key := range slices.Sorted(maps.Keys(t.images)) {
+			eco, pkgs := packages(t.images[key].troot)
+			if eco == "" || len(pkgs) == 0 {
+				continue // ponytail: Debian/Ubuntu/Alpine only, RHEL family is post-MVP
+			}
+			found, err := scanPackages(name, eco, pkgs, kev)
+			if err != nil {
+				return nil, fmt.Errorf("%s: %w", name, err)
+			}
+			for _, f := range found {
+				if old, ok := merged[f.Fingerprint()]; !ok || vulnCount(f.Title) > vulnCount(old.Title) {
+					merged[f.Fingerprint()] = f
+				}
+			}
 		}
-		found, err := scanPackages(name, eco, pkgs, kev)
-		if err != nil {
-			return nil, fmt.Errorf("%s: %w", name, err)
+		slices.Sort(t.names)
+		for _, f := range merged {
+			if ns := t.names; len(ns) > 0 {
+				note := fmt.Sprintf(" Running as %d container(s): %s", len(ns), strings.Join(ns[:min(2, len(ns))], ", "))
+				if len(ns) > 2 {
+					note += ", ..."
+				}
+				f.Detail += note + "."
+			}
+			fs = append(fs, f)
 		}
-		fs = append(fs, found...)
 	}
 	sort.Slice(fs, func(i, j int) bool { return fs[i].Title < fs[j].Title })
 	return fs, nil
+}
+
+var vulnCountRe = regexp.MustCompile(`\((\d+) vulnerabilities\)`)
+
+// vulnCount is the number in a "cve.outdated" title (0 for other findings): the image with more wins a merge.
+func vulnCount(title string) int {
+	if m := vulnCountRe.FindStringSubmatch(title); m != nil {
+		n, _ := strconv.Atoi(m[1])
+		return n
+	}
+	return 0
 }
 
 func scanPackages(target, eco string, pkgs []pkg, kev map[string]bool) ([]finding.Finding, error) {
@@ -313,6 +368,9 @@ func getJSON(url string, body, out any) error {
 }
 
 // containers maps container id -> one of its pids; /proc/<pid>/root is the container's filesystem.
+// The id comes from the whole systemd cgroup path (a user can name their own scope with any id) and must be
+// a container Docker knows. Not uid 0 only: container processes may run as non-root host uids.
+// ponytail: a pid reused between this check and the scan's reads of /proc/<pid>/root is not guarded against.
 func containers(root string) map[string]string {
 	out := map[string]string{}
 	entries, _ := os.ReadDir(filepath.Join(root, "proc"))
@@ -320,23 +378,33 @@ func containers(root string) map[string]string {
 		if _, err := strconv.Atoi(e.Name()); err != nil {
 			continue
 		}
-		if id := containerRe.FindString(readFile(root, "proc/"+e.Name()+"/cgroup")); id != "" && out[id] == "" {
-			out[id] = e.Name()
+		m := containerCg.FindStringSubmatch(systemdCgroup(readFile(root, "proc/"+e.Name()+"/cgroup")))
+		if m == nil || out[m[1]] != "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(root, "var/lib/docker/containers", m[1])); err == nil {
+			out[m[1]] = e.Name()
 		}
 	}
 	return out
 }
 
-// containerLabel is "name (image)" from Docker's on-disk state, or the short id when that isn't readable.
-func containerLabel(root, id string) string {
+// containerLabel returns the container's name, its image tag and image ID from Docker's on-disk state.
+// When that isn't readable the short id stands for the tag and the ID is empty.
+func containerLabel(root, id string) (name, tag, imageID string) {
 	var cfg struct {
 		Name   string
+		Image  string // top-level: the image ID
 		Config struct{ Image string }
 	}
 	if json.Unmarshal([]byte(readFile(root, "var/lib/docker/containers/"+id+"/config.v2.json")), &cfg) != nil || cfg.Name == "" {
-		return id[:12]
+		return id[:12], id[:12], ""
 	}
-	return strings.TrimPrefix(cfg.Name, "/") + " (" + cfg.Config.Image + ")"
+	tag = cfg.Config.Image
+	if tag == "" {
+		tag = id[:12]
+	}
+	return strings.TrimPrefix(cfg.Name, "/"), tag, cfg.Image
 }
 
 // packages returns the OSV ecosystem and installed source packages of the OS under root.
