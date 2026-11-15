@@ -166,8 +166,12 @@ func Collect(root string) Snapshot {
 		return nil
 	})
 
-	for _, sock := range listening(root) {
-		s["port"]["tcp "+sock.addr] = ""
+	socks := listening(root)
+	skip := orchestratorPorts(root, socks)
+	for _, sock := range socks {
+		if !skip[sock.addr] {
+			s["port"]["tcp "+sock.addr] = ""
+		}
 	}
 	return s
 }

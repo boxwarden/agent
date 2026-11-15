@@ -24,6 +24,17 @@ func TestCVEs(t *testing.T) {
 	write(t, root, "proc/555/cgroup", "0::/system.slice/docker-"+id+".scope\n")
 	write(t, root, "proc/555/root/etc/os-release", "ID=alpine\nVERSION_ID=3.20.3\n")
 	write(t, root, "proc/555/root/lib/apk/db/installed", "C:x\nP:busybox-binsh\nV:1.36.1-r28\no:busybox\n\nP:musl\nV:1.2.5-r0\n\n")
+	// A second container of the same image (a redeploy, or Nomad count=2): one finding, scanned once.
+	id2 := strings.Repeat("cd", 32)
+	write(t, root, "proc/556/cgroup", "0::/system.slice/docker-"+id2+".scope\n")
+	// Same tag, different image ID (":latest" pulled twice): a separate finding, not merged.
+	id3 := strings.Repeat("ef", 32)
+	write(t, root, "proc/557/cgroup", "0::/system.slice/docker-"+id3+".scope\n")
+	write(t, root, "proc/557/root/etc/os-release", "ID=alpine\nVERSION_ID=3.20.3\n")
+	write(t, root, "proc/557/root/lib/apk/db/installed", "P:musl\nV:1.2.5-r0\n\n")
+	write(t, root, "var/lib/docker/containers/"+id3+"/config.v2.json", `{"Name":"/app-3333","Image":"sha256:bbb222bbb222bbb222","Config":{"Image":"reg.example/app:v1"}}`)
+	write(t, root, "var/lib/docker/containers/"+id+"/config.v2.json", `{"Name":"/app-1111","Image":"sha256:aaa111aaa111aaa111","Config":{"Image":"reg.example/app:v1"}}`)
+	write(t, root, "var/lib/docker/containers/"+id2+"/config.v2.json", `{"Name":"/app-2222","Image":"sha256:aaa111aaa111aaa111","Config":{"Image":"reg.example/app:v1"}}`)
 
 	vulns := map[string]string{ // id -> fixed version ("" = no fix yet)
 		"DEBIAN-CVE-2024-0001":  "3.0.11-1~deb12u2",
@@ -94,8 +105,8 @@ func TestCVEs(t *testing.T) {
 			t.Errorf("missing query %q in %v", q, queries)
 		}
 	}
-	if len(queries) != 4 {
-		t.Errorf("openssl+libssl3 must collapse into one source query, removed packages skipped: %v", queries)
+	if len(queries) != 5 { // host 2 (libssl3 collapses into openssl, removed packages skipped) + 2 for image aaa (app-1111/2222 scanned once) + 1 for image bbb, same tag: its clean scan must not hide aaa's finding
+		t.Errorf("queries: %v", queries)
 	}
 
 	got := map[string]finding.Finding{}
@@ -103,9 +114,9 @@ func TestCVEs(t *testing.T) {
 		got[f.Title] = f
 	}
 	want := map[string]finding.Severity{
-		"Host: glibc 2.36-9 has actively exploited CVE-2023-4911":                              finding.Critical,
-		"Host: 2 packages have security fixes available (2 vulnerabilities)":                   finding.Medium,
-		"Container abababababab: 1 packages have security fixes available (1 vulnerabilities)": finding.Medium,
+		"Host: glibc 2.36-9 has actively exploited CVE-2023-4911":                                    finding.Critical,
+		"Host: 2 packages have security fixes available (2 vulnerabilities)":                         finding.Medium,
+		"Container reg.example/app:v1: 1 packages have security fixes available (1 vulnerabilities)": finding.Medium,
 	}
 	if len(got) != len(want) {
 		t.Fatalf("got %d findings: %v", len(got), got)
@@ -118,8 +129,26 @@ func TestCVEs(t *testing.T) {
 	if f := got["Host: glibc 2.36-9 has actively exploited CVE-2023-4911"]; !strings.Contains(f.Fix, "--only-upgrade libc6") {
 		t.Errorf("KEV fix must upgrade the binary package: %q", f.Fix)
 	}
-	if f := got["Container abababababab: 1 packages have security fixes available (1 vulnerabilities)"]; !strings.Contains(f.Fix, "docker compose pull") {
+	f := got["Container reg.example/app:v1: 1 packages have security fixes available (1 vulnerabilities)"]
+	if !strings.Contains(f.Fix, "docker compose pull") {
 		t.Errorf("container fix: %q", f.Fix)
+	}
+	if !strings.Contains(f.Detail, "3 container(s): app-1111, app-2222, ...") || strings.Contains(f.Fingerprint(), "app-1111") {
+		t.Errorf("identity must be the image, names only in detail: %q %q", f.Detail, f.Fingerprint())
+	}
+}
+
+// A user can name their own scope after a real container id; only the full system cgroup path counts.
+func TestContainersAnchoredCgroup(t *testing.T) {
+	root := t.TempDir()
+	id, ghost := strings.Repeat("ab", 32), strings.Repeat("cd", 32)
+	write(t, root, "var/lib/docker/containers/"+id+"/config.v2.json", "{}")
+	write(t, root, "proc/100/cgroup", "0::/user.slice/user-1000.slice/user@1000.service/app.slice/run-"+id+".scope\n") // lexicographically first
+	write(t, root, "proc/200/cgroup", "0::/system.slice/docker-"+id+".scope\n")
+	write(t, root, "proc/300/cgroup", "0::/system.slice/docker-"+ghost+".scope\n") // not a Docker container
+	got := containers(root)
+	if len(got) != 1 || got[id] != "200" {
+		t.Errorf("got %v", got)
 	}
 }
 
@@ -142,12 +171,12 @@ func TestEcosystem(t *testing.T) {
 func TestContainerLabel(t *testing.T) {
 	root := t.TempDir()
 	id := strings.Repeat("cd", 32)
-	if got := containerLabel(root, id); got != "cdcdcdcdcdcd" {
-		t.Errorf("fallback: %q", got)
+	if name, tag, iid := containerLabel(root, id); name != "cdcdcdcdcdcd" || tag != "cdcdcdcdcdcd" || iid != "" {
+		t.Errorf("fallback: %q %q %q", name, tag, iid)
 	}
-	write(t, root, "var/lib/docker/containers/"+id+"/config.v2.json", `{"Name":"/app-redis-1","Config":{"Image":"redis:7-alpine"}}`)
-	if got := containerLabel(root, id); got != "app-redis-1 (redis:7-alpine)" {
-		t.Errorf("label: %q", got)
+	write(t, root, "var/lib/docker/containers/"+id+"/config.v2.json", `{"Name":"/app-redis-1","Image":"sha256:abc","Config":{"Image":"redis:7-alpine"}}`)
+	if name, tag, iid := containerLabel(root, id); name != "app-redis-1" || tag != "redis:7-alpine" || iid != "sha256:abc" {
+		t.Errorf("label: %q %q %q", name, tag, iid)
 	}
 }
 
